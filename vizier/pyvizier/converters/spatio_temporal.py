@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Spatio-temporal converters."""
 
@@ -135,7 +137,7 @@ class TimedLabelsExtractor:
                 delta_idx[-1] = True
             else:
               # No measurements were found.
-              delta_idx = np.array([], dtype=np.bool)
+              delta_idx = np.array([], dtype=bool)
             # Filter labels and times.
             labels[mc.metric_information.name] = marr[delta_idx][:, np.newaxis]
             times = times[delta_idx]
@@ -318,7 +320,7 @@ class SparseSpatioTemporalConverter(core.TrialToNumpyDict):
     # isinstance(np.finfo(np.float32).max, float) == False
     specs[name] = core.NumpyArraySpec.from_parameter_config(
         pyvizier.ParameterConfig.factory(
-            name=name, bounds=(0.0, np.finfo(np.float).max)),
+            name=name, bounds=(0.0, np.finfo(float).max)),
         core.NumpyArraySpecType.default_factory)
     return specs
 
@@ -469,9 +471,7 @@ class DenseSpatioTemporalConverter(core.TrialToNumpyDict):
     return self.trial_converter.to_features(trials)
 
   def to_xty(
-      self,
-      trials,
-      temporal_selection: str = 'auto'
+      self, trials: Sequence[pyvizier.Trial], temporal_selection: str = 'auto'
   ) -> Tuple[Dict[str, np.ndarray], np.ndarray, Dict[str, np.ndarray]]:
     """Returns x, t, and y.
 

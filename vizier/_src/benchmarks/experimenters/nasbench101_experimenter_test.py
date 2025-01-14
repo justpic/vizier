@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for nasbench101_experimenter."""
 from absl import logging
@@ -40,7 +42,9 @@ class Nasbench101ExperimenterTest(absltest.TestCase):
       self.assertEqual(trial.status, pyvizier.TrialStatus.COMPLETED)
       if not trial.infeasible:
         metric_name = problem_statement.metric_information.item().name
-        eval_objective = trial.final_measurement.metrics[metric_name].value
+        eval_objective = trial.final_measurement_or_die.metrics[
+            metric_name
+        ].value
         self.assertGreaterEqual(eval_objective, 0.0)
         self.assertLessEqual(eval_objective, 100.0)
 

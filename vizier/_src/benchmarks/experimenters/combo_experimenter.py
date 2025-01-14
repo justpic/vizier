@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Categorical benchmarks from https://github.com/QUVA-Lab/COMBO.
 
 Lines with 'ATTENTION' mean that code was modified from original Github, in
 order to fix bugs with the original code.
 """
+
+# pyformat: disable
 from typing import List, Optional, Sequence, Tuple
 import numpy as np
 
@@ -31,7 +35,7 @@ class IsingExperimenter(experimenter.Experimenter):
   """Ising Sparisification Problem."""
 
   def __init__(self,
-               lamda: float,
+               lamda: float = 1e-2,
                ising_grid_h: int = 4,
                ising_grid_w: int = 4,
                ising_n_edges: int = 24,
@@ -97,7 +101,7 @@ class ContaminationExperimenter(experimenter.Experimenter):
   """Contamination Control Problem."""
 
   def __init__(self,
-               lamda: float,
+               lamda: float = 1e-2,
                contamination_n_stages: int = 25,
                random_seed: Optional[int] = None):
     self._lamda = lamda
@@ -408,7 +412,7 @@ class MAXSATExperimenter(experimenter.Experimenter):
           int(suggestion.parameters[f'x_{i}'].value == 'True')
           for i in range(self._n_variables)
       ]
-      x = np.array(bools, dtype=np.bool)
+      x = np.array(bools, dtype=bool)
       satisfied = np.array([
           (x[clause[0]] == clause[1]).any() for clause in self._clauses
       ])

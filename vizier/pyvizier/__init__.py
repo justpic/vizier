@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""PyVizier classes for Pythia policies."""
+from __future__ import annotations
 
+"""PyVizier classes for general use.
+
+Contains API shared across all platforms (Internal, Cloud, OSS).
+"""
+
+from vizier._src.pyvizier.oss.study_config import ParameterValueSequence
 from vizier._src.pyvizier.pythia.study import StudyDescriptor
 from vizier._src.pyvizier.pythia.study import StudyState
 from vizier._src.pyvizier.pythia.study import StudyStateInfo
@@ -22,16 +28,18 @@ from vizier._src.pyvizier.shared.base_study_config import MetricsConfig
 from vizier._src.pyvizier.shared.base_study_config import MetricType
 from vizier._src.pyvizier.shared.base_study_config import ObjectiveMetricGoal
 from vizier._src.pyvizier.shared.base_study_config import ProblemStatement
-from vizier._src.pyvizier.shared.base_study_config import SearchSpace
-from vizier._src.pyvizier.shared.base_study_config import SearchSpaceSelector
 from vizier._src.pyvizier.shared.common import Metadata
 from vizier._src.pyvizier.shared.common import MetadataValue
 from vizier._src.pyvizier.shared.common import Namespace
 from vizier._src.pyvizier.shared.parameter_config import ExternalType
+from vizier._src.pyvizier.shared.parameter_config import FidelityConfig
 from vizier._src.pyvizier.shared.parameter_config import MonotypeParameterSequence
 from vizier._src.pyvizier.shared.parameter_config import ParameterConfig
 from vizier._src.pyvizier.shared.parameter_config import ParameterType
 from vizier._src.pyvizier.shared.parameter_config import ScaleType
+from vizier._src.pyvizier.shared.parameter_config import SearchSpace
+from vizier._src.pyvizier.shared.parameter_config import SearchSpaceSelector
+from vizier._src.pyvizier.shared.parameter_iterators import SequentialParameterBuilder
 from vizier._src.pyvizier.shared.study import ProblemAndTrials
 from vizier._src.pyvizier.shared.trial import CompletedTrial
 from vizier._src.pyvizier.shared.trial import CompletedTrialWithMeasurements
@@ -50,3 +58,11 @@ from vizier._src.pyvizier.shared.trial import TrialStatus
 from vizier._src.pyvizier.shared.trial import TrialSuggestion
 
 FlatSpace = SearchSpace
+
+# Documentation
+assert isinstance(NaNMetric, Metric)
+assert issubclass(CompletedTrial, Trial)
+assert issubclass(CompletedTrialWithMeasurements, Trial)
+assert issubclass(PendingTrial, Trial)
+assert issubclass(PendingTrialWithMeasurements, Trial)
+assert issubclass(Trial, TrialSuggestion)

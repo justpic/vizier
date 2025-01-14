@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Utils for attrs."""
 
@@ -39,6 +41,19 @@ def assert_not_none(instance: Any, attribute: attr.Attribute,
                     value: Any) -> None:
   if value is None:
     raise ValueError(f'{attribute.name} must not be None in {type(instance)}.')
+
+
+def assert_between(
+    low: float, high: float
+) -> Callable[[Any, attr.Attribute, str], None]:
+  def validator(instance, attribute, value):
+    del instance
+    if value < low or value > high:
+      raise ValueError(
+          f'{attribute.name} ({value}) must be between {low} and {high}'
+      )
+
+  return validator
 
 
 def assert_re_fullmatch(

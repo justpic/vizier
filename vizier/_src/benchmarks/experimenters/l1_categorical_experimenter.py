@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """L1 categorical experimenter.
 
 The experimenter's evaluation function counts the number of different parameters
 values between the optimal point ('optimum') and the suggestion trial.
 """
 
+import copy
+import logging
 from typing import Optional, Sequence
 
 import numpy as np
@@ -34,6 +38,7 @@ class L1CategorialExperimenter(experimenter.Experimenter):
       num_categories: Sequence[int],
       optimum: Optional[Sequence[int]] = None,
       seed: Optional[int] = None,
+      verbose: bool = False,
   ):
     """Constructor.
 
@@ -41,10 +46,11 @@ class L1CategorialExperimenter(experimenter.Experimenter):
     created.
 
     Arguments:
-      num_categories: The number of number of categories in each parameter.
+      num_categories: The number of categories in each parameter.
       optimum: Optional list of indices indicating the optimum point. If not
         set, randomly created from seed.
       seed: Optional random generator seed.
+      verbose: Whether to show logs.
     """
     rng = np.random.default_rng(seed=seed)
     self._problem = vz.ProblemStatement()
@@ -65,23 +71,25 @@ class L1CategorialExperimenter(experimenter.Experimenter):
     self._problem.metric_information.append(
         vz.MetricInformation(
             name='objective', goal=vz.ObjectiveMetricGoal.MINIMIZE))
+    if verbose:
+      logging.info('L1CategoricalExperimenter optimum point: %s', self._optimum)
 
   def evaluate(self, suggestions: Sequence[vz.Trial]):
     for suggestion in suggestions:
-      loss = 0
+      loss = 0.0
       for param_config in self._problem.search_space.parameters:
         if suggestion.parameters[param_config.name].value != self._optimum[
             param_config.name]:
-          loss += 1
+          loss += 1.0
       suggestion.complete(vz.Measurement(metrics={'objective': loss}))
 
   @property
-  def optimum_trial(self) -> vz.Trial:
-    """Evalutes and returns the optimal trial."""
-    optimum_trial = vz.Trial(parameters=self._optimum)
-    self.evaluate([optimum_trial])
-    return optimum_trial
+  def optimal_trial(self) -> vz.Trial:
+    """Evaluates and returns the optimal trial."""
+    optimal_trial = vz.Trial(parameters=self._optimum)
+    self.evaluate([optimal_trial])
+    return optimal_trial
 
   def problem_statement(self):
     """See superclass."""
-    return self._problem
+    return copy.deepcopy(self._problem)

@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for vizier.pyvizier.shared.common."""
 
@@ -374,6 +376,18 @@ class MetadataTest(absltest.TestCase):
     m3.attach(mm.ns('ns1').ns('ns:11'))
     self.assertEqual(m3['z'], 'Z')
     self.assertEqual(m3['foo'], 'bar')
+
+  def test_metadata_items_by_cls(self):
+    mm = common.Metadata(foo='bar', nerf='gleep')
+    mm['aaa'] = duration_pb2.Duration(seconds=5)
+    mm.ns('ns1')['foo'] = 'bar1'
+    test1 = list(sorted(mm.items_by_cls(cls=str)))
+    self.assertLen(test1, 2)
+    self.assertEqual(test1[0], ('foo', 'bar'))
+    self.assertEqual(test1[1], ('nerf', 'gleep'))
+    test2 = list(sorted(mm.items_by_cls(cls=duration_pb2.Duration)))
+    self.assertLen(test2, 1)
+    self.assertEqual(test2[0][1].seconds, 5)
 
 
 if __name__ == '__main__':

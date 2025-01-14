@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,10 +23,9 @@
 OUTPUT_FOLDER=_build
 
 # Install Sphinx.
-sudo apt-get install python3-sphinx
-
+pip install sphinx>=8.0.0  # Make sure up-to-date with ReadTheDocs server.
 # Installs relevant Sphinx packages.
-pip install -r requirements-docs.txt --use-deprecated=legacy-resolver
+pip install -r requirements-docs.txt
 
 # Build files (HTML, doctests, etc.) into `OUTPUT_FOLDER` directory.
 rm -rf ${OUTPUT_FOLDER}  # Clear out original folder

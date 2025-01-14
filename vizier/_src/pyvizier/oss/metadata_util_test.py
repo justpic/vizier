@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Tests for vizier.pyvizier.oss.metadata_util."""
 
 from vizier._src.pyvizier.oss import metadata_util
-from vizier.service import study_pb2
+from vizier._src.service import study_pb2
 
 from absl.testing import absltest
 
@@ -40,6 +42,15 @@ class MetadataUtilTest(absltest.TestCase):
     self.assertIsNone(metadata_util.get(trial, key='TYPO', ns=''))
     self.assertIsNone(
         metadata_util.get_proto(trial, key='TYPO', ns='', cls=study_pb2.Trial))
+
+  def test_assign(self):
+    trial = study_pb2.Trial(id='trial')
+    metadata_util.assign(trial, key='k', ns='', value='value')
+    self.assertEqual(metadata_util.get(trial, key='k', ns=''), 'value')
+    metadata_util.assign(
+        trial, key='k', ns='', value='222', mode='insert_or_assign'
+    )
+    self.assertEqual(metadata_util.get(trial, key='k', ns=''), '222')
 
 
 if __name__ == '__main__':

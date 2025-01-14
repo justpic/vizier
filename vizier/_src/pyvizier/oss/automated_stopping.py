@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Convenience classes for configuring Vizier Early-Stopping Configs."""
 import copy
 
 import attr
-from vizier.service import study_pb2
+from vizier._src.service import study_pb2
 
 # When new early stopping config protos are added, include them below
 # with a Union[]

@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Fast divide-and-conquer (DC) algorithms for computing Pareto frontier."""
 
@@ -60,6 +62,26 @@ class BaseParetoOptimalAlgorithm(metaclass=abc.ABCMeta):
       that the point is not dominated by any point in against.
     """
     pass
+
+  def update_pareto_optimal(
+      self, current_pareto_optimal: np.ndarray, incremental_points: np.ndarray
+  ) -> np.ndarray:
+    """An algorithm to update the Pareto frontier.
+
+    Args:
+      current_pareto_optimal: M-by-D 2D array of current pareto optimal points.
+        M = number of points, D = dimension.
+      incremental_points: N-by-D 2D array of incremental points. N = number of
+        points, D = dimension.
+
+    Returns:
+      List of point indices of which are in the pareto frontier.
+      Example: returns [2, 4] when only ckpt_2 and ckpt_4 are on pareto.
+    """
+    is_optimal = self.is_pareto_optimal(
+        np.append(current_pareto_optimal, incremental_points, axis=0)
+    )
+    return np.asarray(is_optimal).nonzero()[0]
 
 
 class NaiveParetoOptimalAlgorithm(BaseParetoOptimalAlgorithm):
@@ -213,7 +235,7 @@ class FastParetoOptimalAlgorithm(BaseParetoOptimalAlgorithm):
   def is_pareto_optimal(self, points: np.ndarray) -> np.ndarray:
     """Fast DC algorithm to find the Pareto frontier. See base class."""
 
-    # Base case naive algorthm for find Pareto optimality.
+    # Base case naive algorithm for find Pareto optimality.
     if len(points) <= self._recursive_threshold:
       return np.array(
           self._base_algorithm.is_pareto_optimal(points), dtype=bool)

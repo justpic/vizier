@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for pareto_optimal."""
 
@@ -82,6 +84,19 @@ class ParetoOptimalTest(absltest.TestCase):
 
     # Results should not be affected by changing recursive threshold.
     self.assertTrue(np.all(simple_check == fast_check))
+
+  def test_update_pareto(self):
+    points = np.array([[1, 2, 3], [1, 2, 3], [2, 4, 1], [1, 2, -1]])
+    np.testing.assert_array_equal(
+        self.algo.is_pareto_optimal(points), [True, True, True, False]
+    )
+
+    # Adding a point that dominates the first two values.
+    point = np.array([[2, 3, 4]])
+    np.testing.assert_array_equal(
+        self.algo.update_pareto_optimal(points, point),
+        [2, 4],
+    )
 
 
 if __name__ == '__main__':

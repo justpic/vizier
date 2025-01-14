@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Bayesian Optimization of Combinatorial Structures (BOCS) from https://arxiv.org/abs/1806.08838.
 
@@ -564,8 +566,10 @@ class BOCSDesigner(vza.Designer):
 
     self._trials = []
 
-  def update(self, trials: vza.CompletedTrials) -> None:
-    self._trials += tuple(trials.completed)
+  def update(
+      self, completed: vza.CompletedTrials, all_active: vza.ActiveTrials
+  ) -> None:
+    self._trials += tuple(completed.trials)
 
   def suggest(self,
               count: Optional[int] = None) -> Sequence[vz.TrialSuggestion]:

@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Base class for acquisition optimizers."""
 
@@ -82,14 +84,15 @@ class GradientFreeOptimizer(abc.ABC):
   """
 
   @abc.abstractmethod
-  def optimize(self,
-               score_fn: BatchTrialScoreFunction,
-               problem: vz.ProblemStatement,
-               *,
-               count: int = 1,
-               budget_factor: float = 1.0,
-               seed_candidates: Sequence[vz.TrialSuggestion] = tuple(),
-               **kwargs) -> list[vz.Trial]:
+  def optimize(
+      self,
+      score_fn: BatchTrialScoreFunction,
+      problem: vz.ProblemStatement,
+      *,
+      count: int = 1,
+      budget_factor: float = 1.0,
+      seed_candidates: Sequence[vz.TrialSuggestion] = tuple()
+  ) -> list[vz.Trial]:
     """Optimizes a function.
 
     Args:
@@ -101,7 +104,6 @@ class GradientFreeOptimizer(abc.ABC):
         fraction of the standard budget for the call.
       seed_candidates: Seed suggestions to be used as initial batch for
         optimization.
-      **kwargs: For experimental keyword arguments.
 
     Returns:
       Trials, of length less than or equal to max_num_suggestions.
@@ -132,13 +134,15 @@ class BranchThenOptimizer(GradientFreeOptimizer):
     else:
       return min(self.max_num_suggestions_per_branch, branch.num_suggestions)
 
-  def optimize(self,
-               score_fn: BatchTrialScoreFunction,
-               problem: vz.ProblemStatement,
-               *,
-               count: int = 1,
-               budget_factor: float = 1.0,
-               **kwargs) -> list[vz.Trial]:
+  def optimize(
+      self,
+      score_fn: BatchTrialScoreFunction,
+      problem: vz.ProblemStatement,
+      *,
+      count: int = 1,
+      budget_factor: float = 1.0,
+      seed_candidates: Sequence[vz.TrialSuggestion] = tuple(),
+  ) -> list[vz.Trial]:
     # If there are conditional branches, use Vizier's default branch
     # selection mechanism.
     branches = self._branch_selector.select_branches(count)

@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,249 +12,341 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for eagle_strategy."""
+from __future__ import annotations
 
-from typing import List, Optional, Any
-from jax import random
+"""Tests for eagle_strategy module."""
+
+import numpy as np
+from vizier import algorithms as vza
 from vizier import pyvizier as vz
 from vizier._src.algorithms.designers.eagle_strategy import eagle_strategy
+from vizier._src.algorithms.designers.eagle_strategy import eagle_strategy_utils
+from vizier._src.algorithms.designers.eagle_strategy import testing
+from vizier.testing import test_studies
 
 from absl.testing import absltest
-
-EagleStrategyDesiger = eagle_strategy.EagleStrategyDesiger
-PRNGKey = Any
+from absl.testing import parameterized
 
 
-def _create_dummy_trial(
-    parent_fly_id: int,
-    x_value: float,
-    obj_value: float,
-) -> vz.Trial:
-  """Create a dummy completed trial."""
-  trial = vz.Trial()
-  measurement = vz.Measurement(metrics={'obj': vz.Metric(value=obj_value)})
-  trial.parameters['x'] = x_value
-  trial.complete(measurement, inplace=True)
-  trial.metadata.ns('eagle')['parent_fly_id'] = str(parent_fly_id)
-  return trial
+EagleStrategyDesigner = eagle_strategy.EagleStrategyDesigner
+FireflyAlgorithmConfig = eagle_strategy_utils.FireflyAlgorithmConfig
 
 
-def _create_dummy_problem_statement() -> vz.ProblemStatement:
-  """Create a dummy problem statement."""
-  problem = vz.ProblemStatement()
-  problem.search_space.root.add_float_param('x', 0.0, 10.0)
-  problem.metric_information.append(
-      vz.MetricInformation(name='obj', goal=vz.ObjectiveMetricGoal.MAXIMIZE))
-  return problem
+class EagleStrategyTest(parameterized.TestCase):
 
-
-def _create_dummy_fly(
-    parent_fly_id: int,
-    x_value: float,
-    obj_value: float,
-) -> eagle_strategy._Firefly:
-  """"Create a dummy firefly with a dummy completed trial."""
-  trial = _create_dummy_trial(parent_fly_id, x_value, obj_value)
-  return eagle_strategy._Firefly(
-      id_=parent_fly_id, perturbation_factor=1.0, generation=1, trial=trial)
-
-
-def _create_dummy_empty_firefly_pool(
-    capacity: int = 10) -> eagle_strategy._FireflyPool:
-  """Create a dummy empty Firefly pool."""
-  problem = _create_dummy_problem_statement()
-  config = eagle_strategy.FireflyAlgorithmConfig()
-  return eagle_strategy._FireflyPool(problem, config, capacity)
-
-
-def _create_dummy_populated_firefly_pool(
-    *,
-    capacity: int,
-    x_values: Optional[List[float]] = None,
-    obj_values: Optional[List[float]] = None,
-) -> eagle_strategy._FireflyPool:
-  """Create a dummy populated Firefly pool with a given capacity."""
-  firefly_pool = _create_dummy_empty_firefly_pool(capacity=capacity)
-  key = random.PRNGKey(0)
-  if not x_values:
-    x_values = [
-        float(x) for x in random.uniform(key, shape=(5,), minval=0, maxval=10)
-    ]
-  if not obj_values:
-    obj_values = [
-        float(o)
-        for o in random.uniform(key, shape=(5,), minval=-1.5, maxval=1.5)
-    ]
-  for parent_fly_id, (obj_val, x_val) in enumerate(zip(obj_values, x_values)):
-    firefly_pool._pool[parent_fly_id] = _create_dummy_fly(
-        parent_fly_id=parent_fly_id, x_value=x_val, obj_value=obj_val)
-  firefly_pool._max_pool_id = capacity
-  return firefly_pool
-
-
-def _create_dummy_empty_eagle_designer(*,
-                                       key: Optional[PRNGKey] = None
-                                      ) -> EagleStrategyDesiger:
-  """"Create a dummy empty eagle designer."""
-  problem = _create_dummy_problem_statement()
-  key = key or random.PRNGKey(0)
-  return EagleStrategyDesiger(problem_statement=problem, key=key)
-
-
-def _create_dummy_populated_eagle_designer(
-    *,
-    x_values: Optional[List[float]] = None,
-    obj_values: Optional[List[float]] = None,
-    key: Optional[PRNGKey] = None) -> EagleStrategyDesiger:
-  """Create a dummy populated eagle designer."""
-  problem = _create_dummy_problem_statement()
-  key = key or random.PRNGKey(0)
-  eagle_designer = EagleStrategyDesiger(problem_statement=problem, key=key)
-  pool_capacity = eagle_designer._firefly_pool.capacity
-  # Override the eagle designer's firefly pool with a populated firefly pool.
-  eagle_designer._firefly_pool = _create_dummy_populated_firefly_pool(
-      x_values=x_values, obj_values=obj_values, capacity=pool_capacity)
-  return eagle_designer
-
-
-class FireflyPoolTest(absltest.TestCase):
-
-  def test_create_or_update_fly(self):
-    # Test creating a new fly in the pool.
-    firefly_pool = _create_dummy_empty_firefly_pool()
-    trial = _create_dummy_trial(parent_fly_id=112, x_value=0, obj_value=0.8)
-    firefly_pool.create_or_update_fly(trial)
-    self.assertEqual(firefly_pool.size, 1)
-    self.assertLen(firefly_pool._pool, 1)
-    self.assertIs(firefly_pool._pool[112].trial, trial)
-    # Test that another trial with the same parent id updates the fly.
-    trial2 = _create_dummy_trial(parent_fly_id=112, x_value=1, obj_value=1.5)
-    firefly_pool.create_or_update_fly(trial2)
-    self.assertEqual(firefly_pool.size, 1)
-    self.assertLen(firefly_pool._pool, 1)
-    self.assertIs(firefly_pool._pool[112].trial, trial2)
-
-  def test_find_closest_parent(self):
-    firefly_pool = _create_dummy_populated_firefly_pool(
-        x_values=[1, 2, 5], obj_values=[2, 10, -2], capacity=4)
-    trial = _create_dummy_trial(parent_fly_id=123, x_value=4.2, obj_value=8)
-    parent_fly = firefly_pool.find_closest_parent(trial)
-    self.assertEqual(parent_fly.id_, 2)
-
-  def test_is_best_fly(self):
-    firefly_pool = _create_dummy_populated_firefly_pool(
-        x_values=[1, 2, 5], obj_values=[2, 10, -2], capacity=4)
-    self.assertTrue(firefly_pool.is_best_fly(firefly_pool._pool[1]))
-    self.assertFalse(firefly_pool.is_best_fly(firefly_pool._pool[0]))
-    self.assertFalse(firefly_pool.is_best_fly(firefly_pool._pool[2]))
-
-  def test_get_next_moving_fly_copy(self):
-    firefly_pool = _create_dummy_populated_firefly_pool(
-        x_values=[1, 2, 5], obj_values=[2, 10, -2], capacity=5)
-    firefly_pool._last_id = 1
-    moving_fly1 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly1.id_, 2)
-    moving_fly2 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly2.id_, 0)
-    moving_fly3 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly3.id_, 1)
-
-  def test_get_next_moving_fly_copy_after_removing_last_id_fly(self):
-    firefly_pool = _create_dummy_populated_firefly_pool(
-        x_values=[1, 2, 5], obj_values=[2, 10, -2], capacity=5)
-    firefly_pool._last_id = 1
-    # Remove the fly associated with `_last_id` from the pool.
-    del firefly_pool._pool[1]
-    moving_fly1 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly1.id_, 2)
-    moving_fly2 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly2.id_, 0)
-    moving_fly3 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly3.id_, 2)
-
-  def test_get_next_moving_fly_copy_after_removing_multiple_flies(self):
-    firefly_pool = _create_dummy_populated_firefly_pool(
-        x_values=[1, 2, 5, -1], obj_values=[2, 10, -2, 8], capacity=5)
-    firefly_pool._last_id = 3
-    # Remove the several flies
-    del firefly_pool._pool[0]
-    del firefly_pool._pool[2]
-    moving_fly1 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly1.id_, 1)
-    moving_fly2 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly2.id_, 3)
-    moving_fly3 = firefly_pool.get_next_moving_fly_copy()
-    self.assertEqual(moving_fly3.id_, 1)
-
-
-class EagleStrategyTest(absltest.TestCase):
-
-  def test_dump_load_state(self):
-    eagle_designer = _create_dummy_populated_eagle_designer()
-    eagle_state = eagle_designer.dump()
+  @parameterized.parameters(
+      testing.create_fake_populated_eagle_designer,  # suggest by mutation.
+      testing.create_fake_empty_eagle_designer,  # suggest by initial designer.
+  )
+  def test_dump_and_load(self, designer_factory):
+    eagle_designer = designer_factory()
+    metadata = eagle_designer.dump()
     # Create a new eagle designer and load state
-    eagle_designer_recovered = _create_dummy_empty_eagle_designer()
-    eagle_designer_recovered.load(eagle_state)
-    # Generate suggestions from the two designers
-    trial_suggestions = eagle_designer.suggest(count=1)
-    trial_suggestions_recovered = eagle_designer_recovered.suggest(count=1)
-    # Test if the suggestion from the two designers equal
-    self.assertEqual(trial_suggestions[0].parameters,
-                     trial_suggestions_recovered[0].parameters)
+    eagle_designer_restored = testing.create_fake_empty_eagle_designer()
+    eagle_designer_restored.load(metadata)
+    # Generate suggestions from the two designers and test if they're equal.
+    for _ in range(10):
+      self.assertEqual(
+          eagle_designer.suggest()[0].parameters,
+          eagle_designer_restored.suggest()[0].parameters,
+      )
+
+  def test_load_with_no_state(self):
+    problem = testing.create_fake_problem_statement()
+    eagle_designer = EagleStrategyDesigner(problem)
+    metadata = vz.Metadata()
+    # Check that the designer can accept empty metadata in load.
+    eagle_designer.load(metadata)
 
   def test_suggest_one(self):
-    eagle_designer = _create_dummy_populated_eagle_designer()
+    eagle_designer = testing.create_fake_populated_eagle_designer()
     trial_suggestion = eagle_designer._suggest_one()
     self.assertIsInstance(trial_suggestion, vz.TrialSuggestion)
     self.assertIsNotNone(
-        trial_suggestion.metadata.ns('eagle').get('parent_fly_id'))
+        trial_suggestion.metadata.ns('eagle').get('parent_fly_id')
+    )
+
+  def test_embedding(self):
+    eagle_designer = testing.create_fake_populated_eagle_designer()
+    # Check that the problem was converted.
+    self.assertEqual(
+        eagle_designer._problem.search_space.parameters[0].bounds, (0.0, 1.0)
+    )
+    # Check that internal suggestions are in normalized range.
+    for _ in range(10):
+      trial_suggestion = eagle_designer._suggest_one()
+      self.assertBetween(trial_suggestion.parameters['x'].value, 0.0, 1.0)
+    # Check that update maps the trials correctly to the normalized space.
+    eagle_designer = testing.create_fake_empty_eagle_designer()
+    trial = vz.Trial({'x': 10.0})
+    trial = trial.complete(
+        vz.Measurement(metrics={'objective': np.random.uniform()})
+    )
+    complete_trials = vza.CompletedTrials([trial])
+    eagle_designer.update(complete_trials, vza.ActiveTrials())
+    self.assertEqual(
+        eagle_designer._firefly_pool._pool[0].trial.parameters['x'].value, 1.0
+    )
+
+  @parameterized.parameters(1e-4, 1.0)
+  def test_penalize_parent_fly_no_trial_change(self, perturbation):
+    eagle_designer = testing.create_fake_populated_eagle_designer(
+        x_values=[1.0, 2.0, 3.0], obj_values=[1, 2, 3], parent_fly_ids=[1, 2, 3]
+    )
+    trial = testing.create_fake_trial(parent_fly_id=2, x_value=2.0, obj_value=2)
+    parent_fly = eagle_designer._firefly_pool._pool[2]
+    # Set the perturbation.
+    parent_fly.perturbation = perturbation
+    before_perturbation = parent_fly.perturbation
+    eagle_designer._penalize_parent_fly(parent_fly, trial)
+    after_perturbation = parent_fly.perturbation
+    if perturbation == 1.0:
+      # Perturbation is already high so capped by the maximimum.
+      self.assertEqual(
+          after_perturbation,
+          before_perturbation * eagle_designer._config.max_perturbation,
+      )
+    elif perturbation == 1e-4:
+      # Not reaching the maximum yet, multiply by 10.
+      self.assertEqual(after_perturbation, 1e-3)
+
+  def test_penalize_parent_fly(self):
+    # Capacitated pool size has 11 fireflies.
+    eagle_designer = testing.create_fake_populated_eagle_designer(
+        x_values=[1.0, 2.0, 3.0], obj_values=[1, 2, 3], parent_fly_ids=[1, 2, 3]
+    )
+    trial = testing.create_fake_trial(
+        parent_fly_id=2, x_value=1.42, obj_value=0.5
+    )
+    parent_fly = eagle_designer._firefly_pool._pool[2]
+    before_perturbation = parent_fly.perturbation
+    eagle_designer._penalize_parent_fly(parent_fly, trial)
+    after_perturbation = parent_fly.perturbation
+    self.assertEqual(after_perturbation, before_perturbation * 0.9)
 
   def test_suggest(self):
-    eagle_designer = _create_dummy_populated_eagle_designer()
+    eagle_designer = testing.create_fake_populated_eagle_designer()
     trial_suggestions = eagle_designer.suggest(count=10)
     self.assertLen(trial_suggestions, 10)
     self.assertIsInstance(trial_suggestions[0], vz.TrialSuggestion)
 
+  def test_suggest_flat(self):
+    problem = vz.ProblemStatement()
+    root = problem.search_space.root
+    root.add_float_param('x1', 0.0, 1.0)
+    root.add_float_param('x2', 0.0, 2.0)
+    metric = vz.MetricInformation(
+        name='obj',
+        goal=vz.ObjectiveMetricGoal.MAXIMIZE,
+    )
+    problem.metric_information.append(metric)
+
+    designer = EagleStrategyDesigner(problem)
+    suggestions = designer.suggest(count=1)
+    self.assertLen(suggestions, 1)
+
   def test_update_capacitated_pool_no_parent_fly_trial_is_better(self):
     # Capacitated pool size has 11 fireflies.
-    eagle_designer = _create_dummy_populated_eagle_designer(
+    eagle_designer = testing.create_fake_populated_eagle_designer(
         x_values=[1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1],
-        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-    trial = _create_dummy_trial(parent_fly_id=98, x_value=1.42, obj_value=100.0)
+        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    )
+    trial = testing.create_fake_trial(
+        parent_fly_id=98, x_value=1.42, obj_value=100.0
+    )
     eagle_designer._update_one(trial)
     self.assertIs(eagle_designer._firefly_pool._pool[3].trial, trial)
 
   def test_update_capacitated_pool_no_parent_fly_trial_is_not_better(self):
-    eagle_designer = _create_dummy_populated_eagle_designer(
+    eagle_designer = testing.create_fake_populated_eagle_designer(
         x_values=[1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1],
-        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-    trial = _create_dummy_trial(parent_fly_id=98, x_value=1.42, obj_value=-80.0)
+        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    )
+    trial = testing.create_fake_trial(
+        parent_fly_id=98, x_value=1.42, obj_value=-80.0
+    )
     prev_trial = eagle_designer._firefly_pool._pool[3].trial
     eagle_designer._update_one(trial)
     self.assertIs(eagle_designer._firefly_pool._pool[3].trial, prev_trial)
 
   def test_update_capacitated_pool_with_parent_fly_trial_is_better(self):
-    eagle_designer = _create_dummy_populated_eagle_designer(
+    eagle_designer = testing.create_fake_populated_eagle_designer(
         x_values=[1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1],
-        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-    trial = _create_dummy_trial(parent_fly_id=2, x_value=3.3, obj_value=80.0)
+        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    )
+    trial = testing.create_fake_trial(
+        parent_fly_id=2, x_value=3.3, obj_value=80.0
+    )
     eagle_designer._update_one(trial)
     self.assertIs(eagle_designer._firefly_pool._pool[2].trial, trial)
 
   def test_update_capacitated_pool_with_parent_fly_trial_is_not_better(self):
-    eagle_designer = _create_dummy_populated_eagle_designer(
+    eagle_designer = testing.create_fake_populated_eagle_designer(
         x_values=[1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1],
-        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-    trial = _create_dummy_trial(parent_fly_id=2, x_value=3.3, obj_value=-80.0)
+        obj_values=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    )
+    trial = testing.create_fake_trial(
+        parent_fly_id=2, x_value=3.3, obj_value=-80.0
+    )
     prev_trial = eagle_designer._firefly_pool._pool[2].trial
     eagle_designer._update_one(trial)
     self.assertIs(eagle_designer._firefly_pool._pool[2].trial, prev_trial)
 
   def test_update_empty_pool(self):
-    eagle_designer = _create_dummy_empty_eagle_designer()
-    trial = _create_dummy_trial(parent_fly_id=0, x_value=3.3, obj_value=0.0)
+    eagle_designer = testing.create_fake_empty_eagle_designer()
+    trial = testing.create_fake_trial(
+        parent_fly_id=0, x_value=3.3, obj_value=0.0
+    )
     eagle_designer._update_one(trial)
     self.assertIs(eagle_designer._firefly_pool._pool[0].trial, trial)
+
+  def test_seeded_random_samples(self):
+    problem = testing.create_fake_problem_statement()
+    suggestions1 = EagleStrategyDesigner(problem, seed=1).suggest(count=3)
+    suggestions2 = EagleStrategyDesigner(problem, seed=1).suggest(count=3)
+    for suggestions1, suggest2 in zip(suggestions1, suggestions2):
+      self.assertEqual(suggestions1.parameters, suggest2.parameters)
+
+  @parameterized.parameters(1, 3, 5)
+  def test_suggest_update(self, batch_size):
+    problem = vz.ProblemStatement()
+    problem.search_space.select_root().add_float_param(
+        'float1', 1e-2, 1e3, scale_type=vz.ScaleType.LOG
+    )
+    problem.search_space.select_root().add_float_param(
+        'float2', -2.0, 5.0, scale_type=vz.ScaleType.LINEAR
+    )
+    problem.search_space.select_root().add_int_param(
+        'int', min_value=0, max_value=10
+    )
+    problem.search_space.select_root().add_discrete_param(
+        'discrete', feasible_values=[0.0, 0.6]
+    )
+    problem.search_space.select_root().add_categorical_param(
+        'categorical', feasible_values=['a', 'b', 'c']
+    )
+    problem.metric_information.append(
+        vz.MetricInformation(goal=vz.ObjectiveMetricGoal.MINIMIZE, name='')
+    )
+    eagle_designer = EagleStrategyDesigner(problem)
+
+    tid = 1
+    # Simulate running the designer for 3 suggestions each with a batch.
+    for _ in range(3):
+      suggestions = eagle_designer.suggest(batch_size)
+      completed = []
+      # Completing the suggestions while assigning unique trial id.
+      for suggestion in suggestions:
+        completed.append(
+            suggestion.to_trial(tid).complete(
+                vz.Measurement(metrics={'': np.random.uniform()})
+            )
+        )
+        tid += 1
+      eagle_designer.update(vza.CompletedTrials(completed), vza.ActiveTrials())
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name='Less suggestions than pool capacity',
+          num_feasible_suggestions=3,
+          num_infeasible_suggestions=2,
+      ),
+      dict(
+          testcase_name='More suggestions than pool capacity',
+          num_feasible_suggestions=50,
+          num_infeasible_suggestions=5,
+      ),
+  )
+  def test_infeasible_trials(
+      self, num_feasible_suggestions, num_infeasible_suggestions
+  ):
+    """Tests that Eagle works with infeasible trials."""
+    problem = vz.ProblemStatement()
+    problem.search_space.select_root().add_float_param(
+        'float1', 1e-2, 1e3, scale_type=vz.ScaleType.LOG
+    )
+    problem.search_space.select_root().add_float_param(
+        'float2', -2.0, 5.0, scale_type=vz.ScaleType.LINEAR
+    )
+    problem.search_space.select_root().add_int_param(
+        'int', min_value=0, max_value=10
+    )
+    problem.search_space.select_root().add_discrete_param(
+        'discrete', feasible_values=[0.0, 0.6]
+    )
+    problem.search_space.select_root().add_categorical_param(
+        'categorical', feasible_values=['a', 'b', 'c']
+    )
+    problem.metric_information.append(
+        vz.MetricInformation(goal=vz.ObjectiveMetricGoal.MINIMIZE, name='')
+    )
+    config = FireflyAlgorithmConfig(infeasible_force_factor=0.1)
+    eagle_designer = EagleStrategyDesigner(problem, config=config)
+
+    def _suggest_and_update(
+        eagle_designer: EagleStrategyDesigner, tid: int, infeasible: bool
+    ):
+      suggestion = eagle_designer.suggest(count=1)[0]
+      completed = suggestion.to_trial(tid).complete(
+          vz.Measurement(metrics={'': np.random.uniform()}),
+          infeasibility_reason='infeasible' if infeasible else None,
+      )
+      eagle_designer.update(
+          vza.CompletedTrials([completed]), vza.ActiveTrials()
+      )
+
+    # Suggest trials and update designer for less than pool capacity.
+    tid = 1
+    for _ in range(num_feasible_suggestions):
+      _suggest_and_update(eagle_designer, tid, infeasible=False)
+      tid += 1
+
+    # Suggest another trial and return it as infeasible.
+    for _ in range(num_infeasible_suggestions):
+      _suggest_and_update(eagle_designer, tid, infeasible=True)
+      tid += 1
+
+    # Test that the pool size is not affected by infeasible trials..
+    self.assertEqual(
+        eagle_designer._firefly_pool.size,
+        min(eagle_designer._firefly_pool.capacity, num_feasible_suggestions),
+    )
+    # Test that the pool contains infeasible trials.
+    self.assertEqual(
+        eagle_designer._firefly_pool._infeasible_count,
+        num_infeasible_suggestions,
+    )
+    self.assertEqual(
+        sum([
+            1
+            for firefly in eagle_designer._firefly_pool._pool.values()
+            if firefly.trial.infeasible
+        ]),
+        num_infeasible_suggestions,
+    )
+    # Suggest more trials while having infeasible trials in the pool.
+    for _ in range(3):
+      _suggest_and_update(eagle_designer, tid, infeasible=False)
+      tid += 1
+
+  def test_on_singleton_search_space(self):
+    problem = vz.ProblemStatement(
+        test_studies.flat_space_with_all_types_with_singletons()
+    )
+    problem.metric_information.append(
+        vz.MetricInformation(
+            name='metric', goal=vz.ObjectiveMetricGoal.MAXIMIZE
+        )
+    )
+    designer = eagle_strategy.EagleStrategyDesigner(problem)
+    initial_suggestions = designer.suggest(25)
+    trials = []
+    for idx, suggestion in enumerate(initial_suggestions):
+      trial = suggestion.to_trial(idx)
+      trial.complete(vz.Measurement({'metric': 1.0}))
+      trials.append(trial)
+    designer.update(vza.CompletedTrials(trials), vza.ActiveTrials([]))
+    self.assertLen(designer.suggest(25), 25)
 
 
 if __name__ == '__main__':

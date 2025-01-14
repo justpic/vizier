@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Sets up the Vizier Service gRPC server.
 
@@ -32,11 +34,20 @@ from absl import app
 from absl import flags
 from absl import logging
 
-from vizier.service import vizier_service
+from vizier import service
+from vizier.service import servers
 
 flags.DEFINE_string(
-    'host', 'localhost',
-    'Host location for the server. For distributed cases, use the IP address.')
+    'host',
+    'localhost',
+    'Host location for the server. For distributed cases, use the IP address.',
+)
+
+flags.DEFINE_string(
+    'database_url',
+    service.SQL_LOCAL_URL,
+    'Location of the database for saving studies.',
+)
 
 FLAGS = flags.FLAGS
 
@@ -47,15 +58,17 @@ def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 
-  service = vizier_service.DefaultVizierService(host=FLAGS.host)
-  logging.info('Address to Vizier Server is: %s', service.endpoint)
+  server = servers.DefaultVizierServer(
+      host=FLAGS.host, database_url=FLAGS.database_url
+  )
+  logging.info('Address to Vizier Server is: %s', server.endpoint)
 
   # prevent the main thread from exiting
   try:
     while True:
       time.sleep(_ONE_DAY_IN_SECONDS)
   except KeyboardInterrupt:
-    del service
+    del server
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for hpob."""
 
@@ -59,18 +61,25 @@ def generate_test_class():
 
         experimenter.evaluate([problem_and_trials.trials[0]])
 
-        logging.info('First five trial metrics: %s', [
-            t.final_measurement.metrics[hpob_experimenter.METRIC_NAME].value
-            for t in problem_and_trials.trials[:5]
-        ])
+        logging.info(
+            'First five trial metrics: %s',
+            [
+                t.final_measurement_or_die.metrics[
+                    hpob_experimenter.METRIC_NAME
+                ].value
+                for t in problem_and_trials.trials[:5]
+            ],
+        )
         logging.info('objective: %f', objective)
         logging.info('evaluated: %s', problem_and_trials.trials[0])
 
         self.assertAlmostEqual(
-            problem_and_trials.trials[0].final_measurement.metrics[
-                hpob_experimenter.METRIC_NAME].value,
+            problem_and_trials.trials[0]
+            .final_measurement_or_die.metrics[hpob_experimenter.METRIC_NAME]
+            .value,
             objective,
-            places=1)
+            places=1,
+        )
 
         break
 

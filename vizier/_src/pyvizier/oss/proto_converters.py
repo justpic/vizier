@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Converters for OSS Vizier's protos from/to PyVizier's classes."""
+
 import datetime
 import logging
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
-from absl import logging
 
+from absl import logging
 from vizier._src.pythia import policy
 from vizier._src.pyvizier.oss import metadata_util
 from vizier._src.pyvizier.pythia import study
@@ -25,34 +28,86 @@ from vizier._src.pyvizier.shared import base_study_config
 from vizier._src.pyvizier.shared import common
 from vizier._src.pyvizier.shared import parameter_config
 from vizier._src.pyvizier.shared import trial
-from vizier.service import pythia_service_pb2
-from vizier.service import study_pb2
-from vizier.service import vizier_service_pb2
+from vizier._src.service import pythia_service_pb2
+from vizier._src.service import study_pb2
+from vizier._src.service import vizier_service_pb2
+
 
 ScaleType = parameter_config.ScaleType
 _ScaleTypePb2 = study_pb2.StudySpec.ParameterSpec.ScaleType
+ExternalType = parameter_config.ExternalType
+_ExternalTypePb2 = study_pb2.StudySpec.ParameterSpec.ExternalType
 ParameterType = parameter_config.ParameterType
 MonotypeParameterSequence = parameter_config.MonotypeParameterSequence
 
 
-class _ScaleTypeMap:
-  """Proto converter for scale type."""
+class StudyStateConverter:
+  """Proto converter for Study states."""
+
   _pyvizier_to_proto = {
-      parameter_config.ScaleType.LINEAR:
-          _ScaleTypePb2.UNIT_LINEAR_SCALE,
-      parameter_config.ScaleType.LOG:
-          _ScaleTypePb2.UNIT_LOG_SCALE,
-      parameter_config.ScaleType.REVERSE_LOG:
-          _ScaleTypePb2.UNIT_REVERSE_LOG_SCALE,
+      study.StudyState.ACTIVE: study_pb2.Study.State.ACTIVE,
+      study.StudyState.ABORTED: study_pb2.Study.State.INACTIVE,
+      study.StudyState.COMPLETED: study_pb2.Study.State.COMPLETED,
   }
   _proto_to_pyvizier = {v: k for k, v in _pyvizier_to_proto.items()}
 
   @classmethod
-  def to_proto(cls, pyvizier: parameter_config.ScaleType) -> _ScaleTypePb2:
+  def to_proto(cls, state: study.StudyState) -> study_pb2.Study.State:
+    if state in cls._pyvizier_to_proto:
+      return cls._pyvizier_to_proto[state]
+    return study_pb2.Study.State.STATE_UNSPECIFIED
+
+  @classmethod
+  def from_proto(cls, proto: study_pb2.Study.State) -> study.StudyState:
+    if proto in cls._proto_to_pyvizier:
+      return cls._proto_to_pyvizier[proto]
+    elif proto == study_pb2.Study.State.STATE_UNSPECIFIED:
+      # OSS Vizier server treats STATE_UNSPECIFIED as ACTIVE.
+      return study.StudyState.ACTIVE
+    else:
+      raise ValueError(
+          'Proto Study state {} has no equivalent in PyVizier.'.format(
+              study_pb2.Study.State.Name(proto)
+          )
+      )
+
+
+class _ScaleTypeMap:
+  """Proto converter for scale type."""
+
+  _pyvizier_to_proto = {
+      ScaleType.LINEAR: _ScaleTypePb2.UNIT_LINEAR_SCALE,
+      ScaleType.LOG: _ScaleTypePb2.UNIT_LOG_SCALE,
+      ScaleType.REVERSE_LOG: _ScaleTypePb2.UNIT_REVERSE_LOG_SCALE,
+  }
+  _proto_to_pyvizier = {v: k for k, v in _pyvizier_to_proto.items()}
+
+  @classmethod
+  def to_proto(cls, pyvizier: ScaleType) -> _ScaleTypePb2:
     return cls._pyvizier_to_proto[pyvizier]
 
   @classmethod
-  def from_proto(cls, proto: _ScaleTypePb2) -> parameter_config.ScaleType:
+  def from_proto(cls, proto: _ScaleTypePb2) -> ScaleType:
+    return cls._proto_to_pyvizier[proto]
+
+
+class _ExternalTypeMap:
+  """Proto converter for external type."""
+
+  _pyvizier_to_proto = dict([
+      (ExternalType.INTERNAL, _ExternalTypePb2.AS_INTERNAL),
+      (ExternalType.BOOLEAN, _ExternalTypePb2.AS_BOOLEAN),
+      (ExternalType.INTEGER, _ExternalTypePb2.AS_INTEGER),
+      (ExternalType.FLOAT, _ExternalTypePb2.AS_FLOAT),
+  ])
+  _proto_to_pyvizier = {v: k for k, v in _pyvizier_to_proto.items()}
+
+  @classmethod
+  def to_proto(cls, pyvizier: ExternalType) -> _ExternalTypePb2:
+    return cls._pyvizier_to_proto[pyvizier]
+
+  @classmethod
+  def from_proto(cls, proto: _ExternalTypePb2) -> ExternalType:
     return cls._proto_to_pyvizier[proto]
 
 
@@ -60,8 +115,13 @@ class ParameterConfigConverter:
   """Converter for ParameterConfig."""
 
   @classmethod
-  def _set_bounds(cls, proto: study_pb2.StudySpec.ParameterSpec, lower: float,
-                  upper: float, parameter_type: ParameterType):
+  def _set_bounds(
+      cls,
+      proto: study_pb2.StudySpec.ParameterSpec,
+      lower: float,
+      upper: float,
+      parameter_type: ParameterType,
+  ):
     """Sets the proto's min_value and max_value fields."""
     if parameter_type == ParameterType.INTEGER:
       proto.integer_value_spec.min_value = lower
@@ -71,23 +131,30 @@ class ParameterConfigConverter:
       proto.double_value_spec.max_value = upper
 
   @classmethod
-  def _set_feasible_points(cls, proto: study_pb2.StudySpec.ParameterSpec,
-                           feasible_points: Sequence[float]):
+  def _set_feasible_points(
+      cls,
+      proto: study_pb2.StudySpec.ParameterSpec,
+      feasible_points: Sequence[float],
+  ):
     """Sets the proto's feasible_points field."""
     feasible_points = sorted(feasible_points)
     proto.discrete_value_spec.ClearField('values')
     proto.discrete_value_spec.values.extend(feasible_points)
 
   @classmethod
-  def _set_categories(cls, proto: study_pb2.StudySpec.ParameterSpec,
-                      categories: Sequence[str]):
+  def _set_categories(
+      cls, proto: study_pb2.StudySpec.ParameterSpec, categories: Sequence[str]
+  ):
     """Sets the protos' categories field."""
     proto.categorical_value_spec.ClearField('values')
     proto.categorical_value_spec.values.extend(categories)
 
   @classmethod
-  def _set_default_value(cls, proto: study_pb2.StudySpec.ParameterSpec,
-                         default_value: Union[float, int, str]):
+  def _set_default_value(
+      cls,
+      proto: study_pb2.StudySpec.ParameterSpec,
+      default_value: Union[float, int, str],
+  ):
     """Sets the protos' default_value field."""
     which_pv_spec = proto.WhichOneof('parameter_value_spec')
     getattr(proto, which_pv_spec).default_value.value = default_value
@@ -100,8 +167,11 @@ class ParameterConfigConverter:
     oneof_name = proto.WhichOneof('parent_value_condition')
     if not oneof_name:
       return []
-    if oneof_name in ('parent_discrete_values', 'parent_int_values',
-                      'parent_categorical_values'):
+    if oneof_name in (
+        'parent_discrete_values',
+        'parent_int_values',
+        'parent_categorical_values',
+    ):
       return list(getattr(getattr(proto, oneof_name), 'values'))
     raise ValueError('Unknown matching_parent_vals: {}'.format(oneof_name))
 
@@ -110,7 +180,8 @@ class ParameterConfigConverter:
       cls,
       proto: study_pb2.StudySpec.ParameterSpec,
       *,
-      strict_validation: bool = False) -> parameter_config.ParameterConfig:
+      strict_validation: bool = False,
+  ) -> parameter_config.ParameterConfig:
     """Creates a ParameterConfig.
 
     Args:
@@ -124,14 +195,19 @@ class ParameterConfigConverter:
     Raises:
       ValueError: See the "strict_validtion" arg documentation.
     """
-    feasible_values = []
+    bounds = None
+    feasible_values = None
     oneof_name = proto.WhichOneof('parameter_value_spec')
     if oneof_name == 'integer_value_spec':
-      bounds = (int(proto.integer_value_spec.min_value),
-                int(proto.integer_value_spec.max_value))
+      bounds = (
+          int(proto.integer_value_spec.min_value),
+          int(proto.integer_value_spec.max_value),
+      )
     elif oneof_name == 'double_value_spec':
-      bounds = (proto.double_value_spec.min_value,
-                proto.double_value_spec.max_value)
+      bounds = (
+          proto.double_value_spec.min_value,
+          proto.double_value_spec.max_value,
+      )
     elif oneof_name == 'discrete_value_spec':
       bounds = None
       feasible_values = proto.discrete_value_spec.values
@@ -148,13 +224,18 @@ class ParameterConfigConverter:
       for conditional_ps in proto.conditional_parameter_specs:
         parent_values = cls._matching_parent_values(conditional_ps)
         children.append(
-            (parent_values, cls.from_proto(conditional_ps.parameter_spec)))
+            (parent_values, cls.from_proto(conditional_ps.parameter_spec))
+        )
     else:
       children = None
 
     scale_type = None
     if proto.scale_type:
       scale_type = _ScaleTypeMap.from_proto(proto.scale_type)
+
+    external_type = None
+    if proto.external_type:
+      external_type = _ExternalTypeMap.from_proto(proto.external_type)
 
     try:
       config = parameter_config.ParameterConfig.factory(
@@ -163,21 +244,28 @@ class ParameterConfigConverter:
           bounds=bounds,
           children=children,
           scale_type=scale_type,
-          default_value=default_value)
+          default_value=default_value,
+          external_type=external_type,
+      )
     except ValueError as e:
       raise ValueError(
-          'The provided proto was misconfigured. {}'.format(proto)) from e
+          'The provided proto was misconfigured. {}'.format(proto)
+      ) from e
 
     if strict_validation and cls.to_proto(config) != proto:
       raise ValueError(
           'The provided proto was misconfigured. Expected: {} Given: {}'.format(
-              cls.to_proto(config), proto))
+              cls.to_proto(config), proto
+          )
+      )
     return config
 
   @classmethod
   def _set_child_parameter_configs(
-      cls, parent_proto: study_pb2.StudySpec.ParameterSpec,
-      pc: parameter_config.ParameterConfig):
+      cls,
+      parent_proto: study_pb2.StudySpec.ParameterSpec,
+      pc: parameter_config.ParameterConfig,
+  ):
     """Sets the parent_proto's conditional_parameter_specs field.
 
     Args:
@@ -187,8 +275,9 @@ class ParameterConfigConverter:
     Raises:
       ValueError: If the child configs are invalid
     """
-    children: List[Tuple[MonotypeParameterSequence,
-                         parameter_config.ParameterConfig]] = []
+    children: List[
+        Tuple[MonotypeParameterSequence, parameter_config.ParameterConfig]
+    ] = []
     for child in pc.child_parameter_configs:
       children.append((child.matching_parent_values, child))
     if not children:
@@ -200,18 +289,28 @@ class ParameterConfigConverter:
         raise ValueError("""Each element in children must be a tuple of
             (Sequence of valid parent values,  ParameterConfig)""")
 
-    logging.debug('_set_child_parameter_configs: parent_proto=%s, children=%s',
-                  parent_proto, children)
+    logging.debug(
+        '_set_child_parameter_configs: parent_proto=%s, children=%s',
+        parent_proto,
+        children,
+    )
     for unsorted_parent_values, child in children:
       parent_values = sorted(unsorted_parent_values)
       child_proto = cls.to_proto(child.clone_without_children)
-      conditional_parameter_spec = study_pb2.StudySpec.ParameterSpec.ConditionalParameterSpec(
-          parameter_spec=child_proto)
+      conditional_parameter_spec = (
+          study_pb2.StudySpec.ParameterSpec.ConditionalParameterSpec(
+              parameter_spec=child_proto
+          )
+      )
 
       if parent_proto.HasField('discrete_value_spec'):
-        conditional_parameter_spec.parent_discrete_values.values[:] = parent_values
+        conditional_parameter_spec.parent_discrete_values.values[:] = (
+            parent_values
+        )
       elif parent_proto.HasField('categorical_value_spec'):
-        conditional_parameter_spec.parent_categorical_values.values[:] = parent_values
+        conditional_parameter_spec.parent_categorical_values.values[:] = (
+            parent_values
+        )
       elif parent_proto.HasField('integer_value_spec'):
         conditional_parameter_spec.parent_int_values.values[:] = parent_values
       else:
@@ -219,7 +318,8 @@ class ParameterConfigConverter:
       if child.child_parameter_configs:
         cls._set_child_parameter_configs(child_proto, child)
       parent_proto.conditional_parameter_specs.extend(
-          [conditional_parameter_spec])
+          [conditional_parameter_spec]
+      )
 
   @classmethod
   def to_proto(
@@ -235,34 +335,44 @@ class ParameterConfigConverter:
       cls._set_bounds(proto, pc.bounds[0], pc.bounds[1], pc.type)
     else:
       raise ValueError('Invalid ParameterConfig: {}'.format(pc))
-    if pc.scale_type is not None and pc.scale_type != ScaleType.UNIFORM_DISCRETE:
+    if (
+        pc.scale_type is not None
+        and pc.scale_type != ScaleType.UNIFORM_DISCRETE
+    ):
       proto.scale_type = _ScaleTypeMap.to_proto(pc.scale_type)
     if pc.default_value is not None:
       cls._set_default_value(proto, pc.default_value)
+    if pc.external_type is not None:
+      proto.external_type = _ExternalTypeMap.to_proto(pc.external_type)
 
     cls._set_child_parameter_configs(proto, pc)
     return proto
 
 
 class ParameterValueConverter:
-  """Converter for trial.ParameterValue."""
+  """Converter for vz.ParameterValue."""
 
   @classmethod
   def from_proto(
-      cls, proto: study_pb2.Trial.Parameter) -> Optional[trial.ParameterValue]:
+      cls, proto: study_pb2.Trial.Parameter
+  ) -> Optional[trial.ParameterValue]:
     """Returns whichever value that is populated, or None."""
     value_proto = proto.value
     oneof_name = value_proto.WhichOneof('kind')
     potential_value = getattr(value_proto, oneof_name)
-    if isinstance(potential_value, float) or isinstance(
-        potential_value, str) or isinstance(potential_value, bool):
+    if (
+        isinstance(potential_value, float)
+        or isinstance(potential_value, str)
+        or isinstance(potential_value, bool)
+    ):
       return trial.ParameterValue(potential_value)
     else:
       return None
 
   @classmethod
-  def to_proto(cls, parameter_value: trial.ParameterValue,
-               name: str) -> study_pb2.Trial.Parameter:
+  def to_proto(
+      cls, parameter_value: trial.ParameterValue, name: str
+  ) -> study_pb2.Trial.Parameter:
     """Returns Parameter Proto."""
     proto = study_pb2.Trial.Parameter(parameter_id=name)
 
@@ -279,7 +389,7 @@ class ParameterValueConverter:
 
 
 class MeasurementConverter:
-  """Converter for trial.MeasurementConverter."""
+  """Converter for vz.Measurement."""
 
   @classmethod
   def from_proto(cls, proto: study_pb2.Measurement) -> trial.Measurement:
@@ -296,14 +406,23 @@ class MeasurementConverter:
     metrics = dict()
 
     for metric in proto.metrics:
-      if metric.metric_id in metrics and metrics[
-          metric.metric_id].value != metric.value:
+      if (
+          metric.metric_id in metrics
+          and metrics[metric.metric_id].value != metric.value
+      ):
         logging.log_first_n(
-            logging.ERROR, 'Duplicate metric of name "%s".'
-            'The newly found value %s will be used and '
-            'the previously found value %s will be discarded.'
-            'This always happens if the proto has an empty-named metric.', 5,
-            metric.metric_id, metric.value, metrics[metric.metric_id].value)
+            logging.ERROR,
+            (
+                'Duplicate metric of name "%s".'
+                'The newly found value %s will be used and '
+                'the previously found value %s will be discarded.'
+                'This always happens if the proto has an empty-named metric.'
+            ),
+            5,
+            metric.metric_id,
+            metric.value,
+            metrics[metric.metric_id].value,
+        )
       try:
         metrics[metric.metric_id] = trial.Metric(value=metric.value)
       except ValueError:
@@ -311,7 +430,8 @@ class MeasurementConverter:
     return trial.Measurement(
         metrics=metrics,
         elapsed_secs=proto.elapsed_duration.seconds,
-        steps=proto.step_count)
+        steps=proto.step_count,
+    )
 
   @classmethod
   def to_proto(cls, measurement: trial.Measurement) -> study_pb2.Measurement:
@@ -323,8 +443,9 @@ class MeasurementConverter:
     proto.step_count = measurement.steps
     int_seconds = int(measurement.elapsed_secs)
     proto.elapsed_duration.seconds = int_seconds
-    proto.elapsed_duration.nanos = int(1e9 *
-                                       (measurement.elapsed_secs - int_seconds))
+    proto.elapsed_duration.nanos = int(
+        1e9 * (measurement.elapsed_secs - int_seconds)
+    )
     return proto
 
 
@@ -339,44 +460,63 @@ class MetricInformationConverter:
     if proto.goal not in list(base_study_config.ObjectiveMetricGoal):
       raise ValueError('Unknown MetricInformation.goal: {}'.format(proto.goal))
 
+    safety_threshold = None
+    desired_min_safe_trials_fraction = None
+
+    if proto.HasField('safety_config'):
+      safety_threshold = proto.safety_config.safety_threshold
+    if proto.safety_config.HasField('desired_min_safe_trials_fraction'):
+      desired_min_safe_trials_fraction = (
+          proto.safety_config.desired_min_safe_trials_fraction
+      )
+
     return base_study_config.MetricInformation(
         name=proto.metric_id,
         goal=proto.goal,
-        safety_threshold=None,
+        safety_threshold=safety_threshold,
+        desired_min_safe_trials_fraction=desired_min_safe_trials_fraction,
         min_value=None,
-        max_value=None)
+        max_value=None,
+    )
 
   @classmethod
   def to_proto(
       cls, obj: base_study_config.MetricInformation
   ) -> study_pb2.StudySpec.MetricSpec:
     """Returns this object as a proto."""
-    return study_pb2.StudySpec.MetricSpec(
-        metric_id=obj.name, goal=obj.goal.value)
+
+    proto = study_pb2.StudySpec.MetricSpec(
+        metric_id=obj.name, goal=obj.goal.value
+    )
+
+    if obj.type == base_study_config.MetricType.SAFETY:
+      proto.safety_config.safety_threshold = obj.safety_threshold
+      if obj.desired_min_safe_trials_fraction is not None:
+        proto.safety_config.desired_min_safe_trials_fraction = (
+            obj.desired_min_safe_trials_fraction
+        )
+    return proto
 
 
 class SearchSpaceConverter:
   """A wrapper for study_pb2.StudySpec."""
 
   @classmethod
-  def from_proto(cls,
-                 proto: study_pb2.StudySpec) -> base_study_config.SearchSpace:
+  def from_proto(
+      cls, proto: study_pb2.StudySpec
+  ) -> parameter_config.SearchSpace:
     """Extracts a SearchSpace object from a StudyConfig proto."""
-    parameter_configs = []
+    space = parameter_config.SearchSpace()
     for pc in proto.parameters:
-      parameter_configs.append(ParameterConfigConverter.from_proto(pc))
-    # TODO: Remove _factory implementation.
-    return base_study_config.SearchSpace._factory(  # pylint:disable=protected-access
-        parameter_configs=parameter_configs)
+      space.add(ParameterConfigConverter.from_proto(pc))
+    return space
 
   @classmethod
   def parameter_protos(
-      cls, obj: base_study_config.SearchSpace
+      cls, obj: parameter_config.SearchSpace
   ) -> List[study_pb2.StudySpec.ParameterSpec]:
     """Returns the search space as a List of ParameterConfig protos."""
-    return [
-        ParameterConfigConverter.to_proto(pc) for pc in obj._parameter_configs  # pylint:disable=protected-access
-    ]
+    return [ParameterConfigConverter.to_proto(pc) for pc in obj.parameters]
 
 
 class MetricsConfigConverter:
@@ -387,19 +527,19 @@ class MetricsConfigConverter:
       cls, protos: Iterable[study_pb2.StudySpec.MetricSpec]
   ) -> base_study_config.MetricsConfig:
     return base_study_config.MetricsConfig(
-        [MetricInformationConverter.from_proto(m) for m in protos])
+        [MetricInformationConverter.from_proto(m) for m in protos]
+    )
 
   @classmethod
   def to_protos(
       cls, obj: base_study_config.MetricsConfig
   ) -> List[study_pb2.StudySpec.MetricSpec]:
-    return [
-        MetricInformationConverter.to_proto(metric) for metric in obj._metrics  # pylint:disable=protected-access
-    ]
+    return [MetricInformationConverter.to_proto(metric) for metric in obj]
 
 
 def _to_pyvizier_trial_status(
-    proto_state: study_pb2.Trial.State) -> trial.TrialStatus:
+    proto_state: study_pb2.Trial.State,
+) -> trial.TrialStatus:
   """from_proto conversion for Trial statuses."""
   if proto_state == study_pb2.Trial.State.REQUESTED:
     return trial.TrialStatus.REQUESTED
@@ -415,8 +555,9 @@ def _to_pyvizier_trial_status(
     return trial.TrialStatus.UNKNOWN
 
 
-def _from_pyvizier_trial_status(status: trial.TrialStatus,
-                                infeasible: bool) -> study_pb2.Trial.State:
+def _from_pyvizier_trial_status(
+    status: trial.TrialStatus, infeasible: bool
+) -> study_pb2.Trial.State:
   """to_proto conversion for Trial states."""
   if status == trial.TrialStatus.REQUESTED:
     return study_pb2.Trial.State.REQUESTED
@@ -434,7 +575,7 @@ def _from_pyvizier_trial_status(status: trial.TrialStatus,
 
 
 class TrialConverter:
-  """Converter for trial.TrialConverter."""
+  """Converter for vz.Trial."""
 
   @classmethod
   def from_proto(cls, proto: study_pb2.Trial) -> trial.Trial:
@@ -451,17 +592,22 @@ class TrialConverter:
       value = ParameterValueConverter.from_proto(parameter)
       if value is not None:
         if parameter.parameter_id in parameters:
-          raise ValueError('Invalid trial proto contains duplicate parameter {}'
-                           ': {}'.format(parameter.parameter_id, proto))
+          raise ValueError(
+              'Invalid trial proto contains duplicate parameter {}: {}'.format(
+                  parameter.parameter_id, proto
+              )
+          )
         parameters[parameter.parameter_id] = value
       else:
-        logging.warning('A parameter without a value will be dropped: %s',
-                        parameter)
+        logging.warning(
+            'A parameter without a value will be dropped: %s', parameter
+        )
 
     final_measurement = None
     if proto.HasField('final_measurement'):
       final_measurement = MeasurementConverter.from_proto(
-          proto.final_measurement)
+          proto.final_measurement
+      )
 
     completion_time = None
     infeasibility_reason = None
@@ -475,7 +621,8 @@ class TrialConverter:
     metadata = common.Metadata()
     for kv in proto.metadata:
       metadata.abs_ns(common.Namespace.decode(kv.ns))[kv.key] = (
-          kv.proto if kv.HasField('proto') else kv.value)
+          kv.proto if kv.HasField('proto') else kv.value
+      )
 
     measurements = []
     for measure in proto.measurements:
@@ -490,15 +637,19 @@ class TrialConverter:
         description=proto.name,
         assigned_worker=proto.client_id or None,
         is_requested=proto.state == proto.REQUESTED,
-        stopping_reason=('stopping reason not supported yet'
-                         if proto.state == proto.STOPPING else None),
+        stopping_reason=(
+            'stopping reason not supported yet'
+            if proto.state == proto.STOPPING
+            else None
+        ),
         parameters=parameters,
         creation_time=creation_time,
         completion_time=completion_time,
         infeasibility_reason=infeasibility_reason,
         final_measurement=final_measurement,
         measurements=measurements,
-        metadata=metadata)  # pytype: disable=wrong-arg-types
+        metadata=metadata,
+    )  # pytype: disable=wrong-arg-types
 
   @classmethod
   def from_protos(cls, protos: Iterable[study_pb2.Trial]) -> List[trial.Trial]:
@@ -516,8 +667,9 @@ class TrialConverter:
     if pytrial.description is not None:
       proto.name = pytrial.description
     proto.id = str(pytrial.id)
-    proto.state = _from_pyvizier_trial_status(pytrial.status,
-                                              pytrial.infeasible)
+    proto.state = _from_pyvizier_trial_status(
+        pytrial.status, pytrial.infeasible
+    )
     proto.client_id = pytrial.assigned_worker or ''
 
     for name, value in pytrial.parameters.items():
@@ -527,7 +679,8 @@ class TrialConverter:
     # metric does not exist in the study config.
     if pytrial.final_measurement is not None:
       proto.final_measurement.CopyFrom(
-          MeasurementConverter.to_proto(pytrial.final_measurement))
+          MeasurementConverter.to_proto(pytrial.final_measurement)
+      )
 
     for measurement in pytrial.measurements:
       proto.measurements.append(MeasurementConverter.to_proto(measurement))
@@ -552,11 +705,12 @@ class TrialConverter:
 
 
 class TrialSuggestionConverter:
-  """Converts trial.TrialSuggestion <--> Pythia TrialSuggestion proto."""
+  """Converts vz.TrialSuggestion <--> Pythia TrialSuggestion proto."""
 
   @classmethod
   def from_proto(
-      cls, proto: pythia_service_pb2.TrialSuggestion) -> trial.TrialSuggestion:
+      cls, proto: pythia_service_pb2.TrialSuggestion
+  ) -> trial.TrialSuggestion:
     """Converts from TrialSuggestion proto to PyVizier TrialSuggestion."""
     parameters = {}
     for parameter in proto.parameters:
@@ -564,14 +718,18 @@ class TrialSuggestionConverter:
       if value is None:
         raise RuntimeError('Parameter %s exists without a value.' % parameter)
       if parameter.parameter_id in parameters:
-        raise ValueError('Invalid trial proto contains duplicate parameter {}'
-                         ': {}'.format(parameter.parameter_id, proto))
+        raise ValueError(
+            'Invalid trial proto contains duplicate parameter {}: {}'.format(
+                parameter.parameter_id, proto
+            )
+        )
       parameters[parameter.parameter_id] = value
 
     metadata = common.Metadata()
     for kv in proto.metadata:
       metadata.abs_ns(common.Namespace.decode(kv.ns))[kv.key] = (
-          kv.proto if kv.HasField('proto') else kv.value)
+          kv.proto if kv.HasField('proto') else kv.value
+      )
 
     return trial.TrialSuggestion(parameters=parameters, metadata=metadata)
 
@@ -590,8 +748,8 @@ class TrialSuggestionConverter:
 
   @classmethod
   def to_proto(
-      cls,
-      suggestion: trial.TrialSuggestion) -> pythia_service_pb2.TrialSuggestion:
+      cls, suggestion: trial.TrialSuggestion
+  ) -> pythia_service_pb2.TrialSuggestion:
     """Converts a pyvizier TrialSuggestion to the corresponding proto."""
     proto = pythia_service_pb2.TrialSuggestion()
 
@@ -599,7 +757,8 @@ class TrialSuggestionConverter:
       proto.parameters.append(ParameterValueConverter.to_proto(value, name))
 
     proto.metadata.extend(
-        metadata_util.make_key_value_list(suggestion.metadata))
+        metadata_util.make_key_value_list(suggestion.metadata)
+    )
     return proto
 
 
@@ -612,9 +771,11 @@ class MetadataDeltaConverter:
   ) -> List[vizier_service_pb2.UnitMetadataUpdate]:
     """Converts pyvizier.MetadataDelta to a List of UnitMetadataUpdate protos."""
     unit_metadata_updates = metadata_util.study_metadata_to_update_list(
-        delta.on_study)
+        delta.on_study
+    )
     unit_metadata_updates.extend(
-        metadata_util.trial_metadata_to_update_list(delta.on_trials))
+        metadata_util.trial_metadata_to_update_list(delta.on_trials)
+    )
     return unit_metadata_updates
 
   @classmethod
@@ -627,10 +788,12 @@ class MetadataDeltaConverter:
       key_value = u_m_u.metadatum
       namespace = common.Namespace.decode(key_value.ns)
       value = (
-          key_value.proto if key_value.HasField('proto') else key_value.value)
+          key_value.proto if key_value.HasField('proto') else key_value.value
+      )
       if u_m_u.HasField('trial_id'):
-        mdd.on_trials[int(
-            u_m_u.trial_id)].abs_ns(namespace)[key_value.key] = value
+        mdd.on_trials[int(u_m_u.trial_id)].abs_ns(namespace)[
+            key_value.key
+        ] = value
       else:
         mdd.on_study.abs_ns(namespace)[key_value.key] = value
     return mdd
@@ -646,15 +809,19 @@ class ProblemStatementConverter:
   ) -> pythia_service_pb2.ProblemStatement:
     """Converts PyVizier ProblemStatement to Proto version."""
     parameter_spec_protos = SearchSpaceConverter.parameter_protos(
-        problem_statement.search_space)
+        problem_statement.search_space
+    )
     metric_information_protos = MetricsConfigConverter.to_protos(
-        problem_statement.metric_information)
+        problem_statement.metric_information
+    )
     keyvalue_protos = metadata_util.make_key_value_list(
-        problem_statement.metadata)
+        problem_statement.metadata
+    )
     return pythia_service_pb2.ProblemStatement(
         search_space=parameter_spec_protos,
         metric_information=metric_information_protos,
-        metadata=keyvalue_protos)
+        metadata=keyvalue_protos,
+    )
 
   @classmethod
   def from_proto(
@@ -664,12 +831,14 @@ class ProblemStatementConverter:
     study_spec = study_pb2.StudySpec(parameters=proto.search_space)
     search_space = SearchSpaceConverter.from_proto(study_spec)
     metric_information = MetricsConfigConverter.from_protos(
-        proto.metric_information)
+        proto.metric_information
+    )
     metadata = metadata_util.from_key_value_list(proto.metadata)
     return base_study_config.ProblemStatement(
         search_space=search_space,
         metric_information=metric_information,
-        metadata=metadata)
+        metadata=metadata,
+    )
 
 
 class StudyDescriptorConverter:
@@ -683,15 +852,18 @@ class StudyDescriptorConverter:
     return pythia_service_pb2.StudyDescriptor(
         config=ProblemStatementConverter.to_proto(study_descriptor.config),
         guid=study_descriptor.guid,
-        max_trial_id=study_descriptor.max_trial_id)
+        max_trial_id=study_descriptor.max_trial_id,
+    )
 
   @classmethod
   def from_proto(
-      cls, proto: pythia_service_pb2.StudyDescriptor) -> study.StudyDescriptor:
+      cls, proto: pythia_service_pb2.StudyDescriptor
+  ) -> study.StudyDescriptor:
     return study.StudyDescriptor(
         config=ProblemStatementConverter.from_proto(proto.config),
         guid=proto.guid,
-        max_trial_id=proto.max_trial_id)
+        max_trial_id=proto.max_trial_id,
+    )
 
 
 class SuggestConverter:
@@ -704,11 +876,13 @@ class SuggestConverter:
   ) -> pythia_service_pb2.SuggestRequest:
     """Conversion from PyVizier to proto."""
     study_descriptor_proto = StudyDescriptorConverter.to_proto(
-        request._study_descriptor)  # pylint:disable=protected-access
+        request._study_descriptor  # pylint:disable=protected-access
+    )
     return pythia_service_pb2.SuggestRequest(
         study_descriptor=study_descriptor_proto,
         count=request.count,
-        checkpoint_dir=request.checkpoint_dir)
+        checkpoint_dir=request.checkpoint_dir,
+    )
 
   @classmethod
   def from_request_proto(
@@ -717,11 +891,13 @@ class SuggestConverter:
   ) -> policy.SuggestRequest:
     """Conversion from proto to PyVizier."""
     study_descriptor = StudyDescriptorConverter.from_proto(
-        proto.study_descriptor)
+        proto.study_descriptor
+    )
     return policy.SuggestRequest(
         study_descriptor=study_descriptor,
         count=proto.count,
-        checkpoint_dir=proto.checkpoint_dir)
+        checkpoint_dir=proto.checkpoint_dir,
+    )
 
   @classmethod
   def to_decision_proto(
@@ -730,10 +906,12 @@ class SuggestConverter:
   ) -> pythia_service_pb2.SuggestDecision:
     """Conversion from PyVizier to proto."""
     trial_suggestion_protos = TrialSuggestionConverter.to_protos(
-        decision.suggestions)
+        decision.suggestions
+    )
     metadelta_protos = MetadataDeltaConverter.to_protos(decision.metadata)
     return pythia_service_pb2.SuggestDecision(
-        suggestions=trial_suggestion_protos, metadata=metadelta_protos)
+        suggestions=trial_suggestion_protos, metadata=metadelta_protos
+    )
 
   @classmethod
   def from_decision_proto(
@@ -757,9 +935,11 @@ class EarlyStopConverter:
     """Conversion from PyVizier to proto."""
     return pythia_service_pb2.EarlyStopRequest(
         study_descriptor=StudyDescriptorConverter.to_proto(
-            request._study_descriptor),  # pylint:disable=protected-access
+            request._study_descriptor  # pylint:disable=protected-access
+        ),
         trial_ids=request.trial_ids,
-        checkpoint_dir=request.checkpoint_dir)
+        checkpoint_dir=request.checkpoint_dir,
+    )
 
   @classmethod
   def from_request_proto(
@@ -768,11 +948,13 @@ class EarlyStopConverter:
   ) -> policy.EarlyStopRequest:
     """Conversion from proto to PyVizier."""
     study_descriptor = StudyDescriptorConverter.from_proto(
-        proto.study_descriptor)
+        proto.study_descriptor
+    )
     return policy.EarlyStopRequest(
         study_descriptor=study_descriptor,
         trial_ids=proto.trial_ids,
-        checkpoint_dir=proto.checkpoint_dir)
+        checkpoint_dir=proto.checkpoint_dir,
+    )
 
   @classmethod
   def to_decisions_proto(
@@ -785,16 +967,19 @@ class EarlyStopConverter:
       predicted_final_measurement_proto = study_pb2.Measurement()
       if decision.predicted_final_measurement:
         predicted_final_measurement_proto = MeasurementConverter.to_proto(
-            decision.predicted_final_measurement)
+            decision.predicted_final_measurement
+        )
       decision_proto = pythia_service_pb2.EarlyStopDecision(
           id=decision.id,
           reason=decision.reason,
           should_stop=decision.should_stop,
-          predicted_final_measurement=predicted_final_measurement_proto)
+          predicted_final_measurement=predicted_final_measurement_proto,
+      )
       decision_protos.append(decision_proto)
     key_value_protos = MetadataDeltaConverter.to_protos(decisions.metadata)
     return pythia_service_pb2.EarlyStopDecisions(
-        decisions=decision_protos, metadata=key_value_protos)
+        decisions=decision_protos, metadata=key_value_protos
+    )
 
   @classmethod
   def from_decisions_proto(
@@ -809,7 +994,9 @@ class EarlyStopConverter:
           reason=decision_proto.reason,
           should_stop=decision_proto.should_stop,
           predicted_final_measurement=MeasurementConverter.from_proto(
-              decision_proto.predicted_final_measurement))
+              decision_proto.predicted_final_measurement
+          ),
+      )
       decisions.append(decision)
     metadata = MetadataDeltaConverter.from_protos(proto.metadata)
     return policy.EarlyStopDecisions(decisions=decisions, metadata=metadata)
