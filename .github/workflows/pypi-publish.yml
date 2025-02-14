@@ -11,15 +11,17 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: Set up Python
-      uses: actions/setup-python@v1
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.x'
+        python-version: '3.12'
     - name: Install dependencies
+      # NOTE: grpcio-tools needs to be periodically updated to support later Python versions.
       run: |
+        sudo apt-get install -y libprotobuf-dev
         python -m pip install --upgrade pip
-        pip install setuptools wheel twine
+        pip install setuptools wheel twine==5.0.0 grpcio-tools>=1.70.0
     - name: Build and publish
       env:
         TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}

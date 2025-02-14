@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,27 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Json utils."""
 
+from typing import Mapping
 import json
 from typing import Any
 
 import numpy as np
+from vizier import pyvizier as vz
 
 
 class NumpyEncoder(json.JSONEncoder):
   """Example: json.dumps(np.array(...), cls=NumpyEncoder)."""
 
-  def default(self, obj: Any) -> Any:
-    if isinstance(obj, np.ndarray):
+  def default(self, o: Any) -> Any:
+    if not isinstance(o, dict) and isinstance(o, Mapping):
+      # Handles FrozenDict and any dict-like structures.
+      return dict(o)
+    elif set(dir(o)).issuperset(set(['tolist', 'dtype', 'shape'])):
+      # Any numpy.array-like objects.
       # Shape must be dumped and restored, in case that the array has shape
       # that includes 0-sized dimensions.
       return {
-          'dtype': np.dtype(obj.dtype).name,
-          'value': obj.tolist(),
-          'shape': obj.shape
+          'dtype': np.dtype(o.dtype).name,
+          'value': o.tolist(),
+          'shape': o.shape
       }
-    return json.JSONEncoder.default(self, obj)
+    else:
+      return o
 
 
 def numpy_hook(obj: Any) -> Any:
@@ -52,3 +61,16 @@ class NumpyDecoder(json.JSONDecoder):
 
   def __init__(self, *args, **kargs):
     super(NumpyDecoder, self).__init__(object_hook=numpy_hook, *args, **kargs)
+
+
+class MetadataEncoder(json.JSONEncoder):
+
+  def default(self, o: Any) -> Any:
+    if isinstance(o, vz.Metadata):
+      d = dict(o)
+      d |= {ns.encode(): o.ns(ns) for ns in o.subnamespaces()}
+      return d
+    elif not isinstance(o, dict) and isinstance(o, Mapping):
+      # Handles FrozenDict and any dict-like structures.
+      return dict(o)
+    return o

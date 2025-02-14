@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Generic interfaces and template for evolutionary algorithms.
 
@@ -39,7 +41,7 @@ To use the provided template, one should implement a subclass of `Offsprings`,
 """
 
 import abc
-from typing import Generic, Optional, Sequence, TypeVar, Union
+from typing import Callable, Generic, Optional, Sequence, TypeVar, Union
 
 from vizier import algorithms as vza
 from vizier import pyvizier as vz
@@ -75,7 +77,7 @@ class Population(serializable.Serializable, abc.ABC):
   def __getitem__(
       self: _P,
       index: Union[int, slice],
-      /,
+     
   ) -> _P:
     pass
 
@@ -112,31 +114,39 @@ class Mutation(abc.ABC, Generic[_PopulationType, _OffspringsType]):
 
   @abc.abstractmethod
   def mutate(self, population: _PopulationType, count: int) -> _OffspringsType:
-    """Generate offsprings."""
+    """Generate offsprings, whose contain count many offsprings."""
 
 
 class CanonicalEvolutionDesigner(vza.PartiallySerializableDesigner,
                                  Generic[_PopulationType, _OffspringsType]):
   """Evolution algorithm template."""
 
-  def __init__(self,
-               converter: PopulationConverter[_PopulationType, _OffspringsType],
-               sampler: Sampler[_OffspringsType],
-               survival: Survival[_PopulationType],
-               adaptation: Mutation[_PopulationType, _OffspringsType],
-               *,
-               first_survival_after: Optional[int] = None,
-               population_size: int = 50):
+  def __init__(
+      self,
+      converter: PopulationConverter[_PopulationType, _OffspringsType],
+      sampler: Sampler[_OffspringsType],
+      survival: Survival[_PopulationType],
+      *,
+      adaptation: Mutation[_PopulationType, _OffspringsType],
+      adaptation_callable: Optional[
+          Callable[[int], Mutation[_PopulationType, _OffspringsType]]
+      ] = None,
+      initial_population: Optional[_PopulationType] = None,
+      first_survival_after: Optional[int] = None,
+      population_size: int = 50,
+  ):
     """Init.
 
     Args:
       converter:
       sampler:
       survival:
-      adaptation:
+      adaptation: Default adaptation. Will be overwrote if adaptation_callable
+        is specified.
+      adaptation_callable: Adapation as a function of number of Trials seen.
+      initial_population: The initial population to seed the evolution.
       first_survival_after: Apply the survival step after observing this many
-        trials. If unset or set to a number less than `population_size`, it
-        defaults to twice the `population_size`.
+        trials. If unset, it defaults to twice the `population_size`.
       population_size: Survival steps reduce the population to this size.
     """
     self._survival = survival
@@ -144,11 +154,12 @@ class CanonicalEvolutionDesigner(vza.PartiallySerializableDesigner,
     self._converter = converter
     self._sampler = sampler
     self._population_size = population_size
-    self._first_survival_after = max(self._population_size * 2,
-                                     first_survival_after or 0)
+    self._adaptation_callable = adaptation_callable
+    self._first_survival_after = (
+        first_survival_after or self._population_size * 2
+    )
     self._num_trials_seen = 0
-
-    self._population = converter.to_population([])
+    self._population = initial_population or converter.to_population([])
 
   @property
   def converter(self) -> PopulationConverter[_PopulationType, _OffspringsType]:
@@ -163,15 +174,24 @@ class CanonicalEvolutionDesigner(vza.PartiallySerializableDesigner,
     count = count or self._population_size
     if self._num_trials_seen < self._first_survival_after:
       return self._converter.to_suggestions(self._sampler.sample(count))
-    return self._converter.to_suggestions(
-        self._adaptation.mutate(self._population, count))
 
-  def update(self, delta: vza.CompletedTrials) -> None:
-    completed = delta.completed
+    if self._adaptation_callable is not None:
+      adaptation = self._adaptation_callable(self._num_trials_seen)
+    else:
+      adaptation = self._adaptation
+
+    suggestions = self._converter.to_suggestions(
+        adaptation.mutate(self._population, count)
+    )
+    return suggestions
+
+  def update(
+      self, completed: vza.CompletedTrials, all_active: vza.ActiveTrials
+  ) -> None:
+    completed = completed.trials
     self._num_trials_seen += len(completed)
     candidates = self._population + self._converter.to_population(completed)
     self._population = self._survival.select(candidates)
-    self._pool = self._population
 
   def load(self, metadata: vz.Metadata):
     self._population = type(self._population).recover(metadata)

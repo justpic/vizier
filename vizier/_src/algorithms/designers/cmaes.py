@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """CMA-ES designer."""
 import json
@@ -56,18 +58,26 @@ class CMAESDesigner(vza.PartiallySerializableDesigner):
     self._num_params = len(self._search_space.parameters)
     if self._num_params < 2:
       raise ValueError(
-          f'CMA-ES only supports search spaces with >=2 parameters. Current number of parameters: {self._num_params}'
+          'CMA-ES only supports search spaces with >=2 parameters. Current'
+          f' number of parameters: {self._num_params}'
       )
 
+    # CMA-ES expects a maximization problem by default, so we flip signs for
+    # minimization metrics.
     self._converter = converters.TrialToArrayConverter.from_study_config(
-        self._problem_statement)
+        self._problem_statement,
+        scale=True,
+        flip_sign_for_minimization_metrics=True,
+    )
     self._cma_es_jax = cma_jax.CMA_ES_JAX(
         param_size=self._num_params, **cma_kwargs)
     self._trial_population = queue.Queue(
         maxsize=self._cma_es_jax.hyper_parameters.pop_size)
 
-  def update(self, trials: vza.CompletedTrials) -> None:
-    completed_trials = list(trials.completed)
+  def update(
+      self, completed: vza.CompletedTrials, all_active: vza.ActiveTrials
+  ) -> None:
+    completed_trials = list(completed.trials)
 
     # Keep inserting completed trials into population. If population is full,
     # a CMA-ES update and queue clear are triggered.
@@ -78,10 +88,6 @@ class CMAESDesigner(vza.PartiallySerializableDesigner):
         # Once full, make a full CMA-ES update.
         features, labels = self._converter.to_xy(
             list(self._trial_population.queue))
-        if self._problem_statement.metric_information.item(
-        ) == vz.ObjectiveMetricGoal.MINIMIZE:
-          # CMA-ES expects a maximization problem by default.
-          labels = -labels
         # CMA-ES expects fitness to be shape (pop_size,) and solutions of shape
         # (pop_size, num_params).
         self._cma_es_jax.tell(

@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,12 +13,46 @@
 # limitations under the License.
 
 #!/bin/bash
-# Runs all core Python unit tests in the Vizier package.
-pytest vizier --ignore=vizier/_src/integration/ --ignore=vizier/_src/benchmarks/ --ignore=vizier/_src/algorithms/
+# Usage: `run_tests.sh (test_name)`
+# where `test_name` can be the following case strings shown below.
+#
+# On a Github workflow, the `test_name` will be supplied from the YML file.
 
-# Run algorithm tests. Disclaimer: Algorithms use multiple external libraries, some of which may break.
-pytest -n auto vizier/_src/algorithms/
-
-# Run benchmark tests. Disclaimer: Benchmarks use multiple external libraries, some of which may break.
-pytest -n auto vizier/_src/benchmarks/
-
+case $1 in
+  "core")
+    pip install -r requirements-jax.txt
+    pytest -n auto vizier \
+    --ignore=vizier/_src/benchmarks/ \
+    --ignore=vizier/_src/algorithms/ \
+    --ignore=vizier/_src/pyglove/ \
+    --ignore=vizier/_src/jax/ \
+    --ignore=vizier/_src/raytune/
+    ;;
+  "algorithms")
+    pip install -r requirements-algorithms.txt \
+    -r requirements-jax.txt
+    echo "These tests are too slow."
+    # pytest -n auto vizier/_src/algorithms/
+    ;;
+  "benchmarks")
+    pip install -r requirements-jax.txt \
+    -r requirements-tf.txt \
+    -r requirements-benchmarks.txt
+    pytest -n auto vizier/_src/benchmarks/
+    ;;
+  "clients")
+    python vizier/service/clients/__init__.py
+    ;;
+  "pyglove")
+    pip install -r requirements-jax.txt
+    pip install pyglove
+    pytest -n auto vizier/_src/pyglove/
+    ;;
+  "raytune")
+    pip install -U ray[tune]
+    pip install -r requirements-jax.txt
+    pip install pyarrow
+    pip install pandas
+    pytest -n auto vizier/_src/raytune/
+    ;;
+esac

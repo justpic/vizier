@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for numpy_experimenter."""
 
@@ -55,7 +57,8 @@ class NumpyExperimenterTest(parameterized.TestCase):
     metric_name = exptr.problem_statement().metric_information.item().name
     self.assertAlmostEqual(
         func(np.array([0.0, 1.0])),
-        t.final_measurement.metrics[metric_name].value)
+        t.final_measurement_or_die.metrics[metric_name].value,
+    )
     self.assertEqual(t.status, pyvizier.TrialStatus.COMPLETED)
 
   def testNonFinite(self):
@@ -74,11 +77,21 @@ class NumpyExperimenterTest(parameterized.TestCase):
         param.name: -float(index) for index, param in enumerate(parameters)
     })
 
-    completed_trials = [t1, t2]
-    exptr.evaluate(completed_trials)
-    for trial in completed_trials:
-      self.assertEmpty(trial.final_measurement.metrics)
+    trials = [t1, t2]
+    exptr.evaluate(trials)
+    for trial in trials:
+      self.assertEmpty(trial.final_measurement_or_die.metrics)
       self.assertTrue(trial.infeasible)
+
+  def testNotInSearchSpace(self):
+    exptr = numpy_experimenter.NumpyExperimenter(
+        impl=lambda x: x,
+        problem_statement=bbob.DefaultBBOBProblemStatement(1),
+    )
+
+    t1 = pyvizier.Trial(parameters={'yyyy': 0.0})
+    with self.assertRaises(ValueError):
+      exptr.evaluate([t1])
 
 
 if __name__ == '__main__':

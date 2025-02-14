@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Sphinx configuration."""
 import os
@@ -48,6 +50,8 @@ extensions = [
     'sphinx.ext.graphviz',
     'sphinx_autodoc_typehints',
     'autodocsumm',
+    # 'myst_parser', TODO: 'myst_commonmark_only' flag conflict
+    'sphinx_rtd_theme',
     'myst_nb',
 ]
 
@@ -67,10 +71,8 @@ suppress_warnings = [
 # templates_path = ['_templates']
 
 # The suffix(es) of source filenames.
-# Note: important to list ipynb before md here: we have both md and ipynb
-# copies of each notebook, and myst will choose which to convert based on
-# the order in the source_suffix list. Notebooks which are not executed have
-# outputs stored in ipynb but not in md, so we must convert the ipynb.
+# NOTE: Ordering matters, as myst will choose which to convert based on
+# the order in the source_suffix list.
 source_suffix = ['.rst', '.ipynb', '.md']
 
 # The main toctree document.
@@ -101,8 +103,8 @@ napolean_use_rtype = False
 
 # The name of an image file (relative to this directory) to place at the top
 # of the sidebar.
-html_logo = './assets/vizier_logo.png'
-html_favicon = './assets/vizier_logo.png'
+html_logo = './assets/vizier_logo2.png'
+html_favicon = './assets/vizier_logo2.png'
 
 # -- Options for myst --------------------------------------------------------
 
@@ -118,3 +120,5 @@ myst_enable_extensions = ['dollarmath']
 add_module_names = False
 
 jupyter_execute_notebooks = 'off'
+
+html_theme = 'sphinx_rtd_theme'

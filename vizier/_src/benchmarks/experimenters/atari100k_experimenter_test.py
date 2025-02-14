@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Tests for atari100k."""
 from absl import logging
 
 from vizier import pyvizier
 from vizier._src.algorithms.designers import random
-from vizier._src.benchmarks.experimenters import atari100k_experimenter
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -27,7 +28,10 @@ class Atari100KTest(parameterized.TestCase):
 
   @absltest.skip("ALE ROMS must be installed manually.")
   @parameterized.parameters('DER', 'DrQ', 'DrQ_eps', 'OTRainbow')
+  @absltest.skip('Jax versioning not updated in Dopamine.')
   def test_e2e_evaluation(self, agent_name):
+    from vizier._src.benchmarks.experimenters import atari100k_experimenter  # pylint: disable=g-import-not-at-top
+
     initial_gin_bindings = {
         'Runner.training_steps': 2,
         'MaxEpisodeEvalRunner.num_eval_episodes': 2,
@@ -39,20 +43,23 @@ class Atari100KTest(parameterized.TestCase):
     experimenter = atari100k_experimenter.Atari100kExperimenter(
         game_name='Pong',
         agent_name=agent_name,
-        initial_gin_bindings=initial_gin_bindings)
+        initial_gin_bindings=initial_gin_bindings,
+    )
 
     designer = random.RandomDesigner(
-        experimenter.problem_statement().search_space, seed=None)
+        experimenter.problem_statement().search_space, seed=None
+    )
 
     suggestions = designer.suggest(2)
     trials = [suggestion.to_trial() for suggestion in suggestions]
     experimenter.evaluate(trials)
-    for evaluated_trial in trials:
-      self.assertEqual(evaluated_trial.status, pyvizier.TrialStatus.COMPLETED)
-      logging.info('Evaluated Trial: %s', evaluated_trial)
-      self.assertGreaterEqual(
-          evaluated_trial.final_measurement.metrics['eval_average_return']
-          .value, 0.0)
+    # Trials should be completed in place.
+    for trial in trials:
+      self.assertEqual(trial.status, pyvizier.TrialStatus.COMPLETED)
+      logging.info('Evaluated Trial: %s', trial)
+      if trial.final_measurement:
+        value = trial.final_measurement.metrics['eval_average_return'].value
+        self.assertGreaterEqual(value, 0.0)
 
 
 if __name__ == '__main__':

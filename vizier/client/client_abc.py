@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Cross-platform Vizier client interfaces.
 
@@ -27,7 +29,7 @@ Modifying the returned object does not update the Vizier service.
 """
 
 import abc
-from typing import Any, Collection, Iterator, Mapping, Optional, Type, TypeVar
+from typing import Any, Iterator, List, Mapping, Optional, Type, TypeVar
 
 from vizier import pyvizier as vz
 
@@ -38,6 +40,7 @@ _T = TypeVar('_T')
 # all vizier clients have the same error handling logic.
 class ResourceNotFoundError(LookupError):
   """Error raised by Vizier clients when resource is not found."""
+
   pass
 
 
@@ -55,7 +58,15 @@ class TrialInterface(abc.ABC):
   @property
   @abc.abstractmethod
   def parameters(self) -> Mapping[str, Any]:
-    """#Materializes the parameters of the trial."""
+    """#Materializes the parameters of the trial.
+
+    The parameters are parsed to the external types. The values in the returned
+    dict can be a list of values, if the search space is configured with
+    indices.
+
+    As a result, TrialInterface.parameters can be totally different
+    from trial.materialize().parameters.
+    """
 
   @abc.abstractmethod
   def delete(self) -> None:
@@ -82,7 +93,8 @@ class TrialInterface(abc.ABC):
       self,
       measurement: Optional[vz.Measurement] = None,
       *,
-      infeasible_reason: Optional[str] = None) -> Optional[vz.Measurement]:
+      infeasible_reason: Optional[str] = None,
+  ) -> Optional[vz.Measurement]:
     """Completes the trial and #materializes the measurement.
 
     * If `measurement` is provided, then Vizier writes it as the trial's final
@@ -119,6 +131,15 @@ class TrialInterface(abc.ABC):
     Returns:
       True if trial is already in STOPPING state or entered STOPPING as a
       result of this method invocation.
+    """
+    pass
+
+  @abc.abstractmethod
+  def stop(self) -> None:
+    """Asks to change the trial status to STOPPING.
+
+    Should be called only if the trial status is ACTIVE. If the trial is
+    STOPPING or COMPLETED, this is a no-op.
     """
     pass
 
@@ -177,10 +198,8 @@ class StudyInterface(abc.ABC):
 
   @abc.abstractmethod
   def suggest(
-      self,
-      *,
-      count: Optional[int] = None,
-      client_id: str = 'default_client_id') -> Collection[TrialInterface]:
+      self, *, count: Optional[int] = None, client_id: str = 'default_client_id'
+  ) -> List[TrialInterface]:
     """Returns Trials to be evaluated by client_id.
 
     Args:
@@ -192,6 +211,22 @@ class StudyInterface(abc.ABC):
 
     Returns:
       Trials.
+    """
+    # TODO: Add `parameters` argument. This will allow
+    # `suggest` to be used with context.
+
+  # TODO: Request does not play well with boolean or discrete
+  # integer parameters.
+  @abc.abstractmethod
+  def request(self, suggestion: vz.TrialSuggestion) -> TrialInterface:
+    """Request a trial to be suggested in the future.
+
+    Requested trials are "queued" in the vizier database. Next time a client
+    requests for a new suggestion, it receives requested trials before any
+    algorithm-generated suggestions.
+
+    Args:
+      suggestion: Suggestion to be requested.
     """
 
   @abc.abstractmethod
@@ -214,14 +249,24 @@ class StudyInterface(abc.ABC):
       delta: Change in Metadata from the original.
     """
 
-  # TODO: Make this method public.
   @abc.abstractmethod
-  def _add_trial(self, trial: vz.Trial) -> TrialInterface:
-    """Adds a trial to the Study. For testing only."""
+  def add_trial(self, trial: vz.Trial) -> TrialInterface:
+    """Adds a trial to the Study. Allows warm-starting.
+
+    Args:
+      trial: Trial to be added.
+
+    Returns:
+      Trial client.
+
+    Raises:
+      ValueError: If the trial is not within the search space.
+    """
 
   @abc.abstractmethod
-  def trials(self,
-             trial_filter: Optional[vz.TrialFilter] = None) -> TrialIterable:
+  def trials(
+      self, trial_filter: Optional[vz.TrialFilter] = None
+  ) -> TrialIterable:
     """Fetches a collection of trials. Default uses vz.TrialFilter()."""
 
   @abc.abstractmethod
@@ -239,8 +284,13 @@ class StudyInterface(abc.ABC):
     """
 
   @abc.abstractmethod
-  def optimal_trials(self) -> TrialIterable:
-    """Returns optimal trial(s)."""
+  def optimal_trials(self, *, count: Optional[int] = None) -> TrialIterable:
+    """Returns (pareto) optimal trial(s). Can be multiple Trial(s).
+
+    Args:
+      count: If provided, returns that many best Trials, breaking ties by
+        earlier Trial id.
+    """
 
   @abc.abstractmethod
   def materialize_problem_statement(self) -> vz.ProblemStatement:
@@ -275,4 +325,5 @@ class StudyInterface(abc.ABC):
   def materialize_state(self) -> vz.StudyState:
     """#Materializes the study state."""
     raise NotImplementedError(
-        f'materialize_state is not implemented in {type(self)}!')
+        f'materialize_state is not implemented in {type(self)}!'
+    )

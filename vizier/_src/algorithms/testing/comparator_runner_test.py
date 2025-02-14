@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,52 +12,103 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Tests for comparator_runner."""
 
 from typing import Optional, Sequence
 
+import jax
+from jax import numpy as jnp
 import numpy as np
 from vizier import algorithms as vza
 from vizier import benchmarks
 from vizier import pyvizier as vz
 from vizier._src.algorithms.optimizers import vectorized_base as vb
 from vizier._src.algorithms.testing import comparator_runner
-from vizier._src.benchmarks.experimenters.synthetic import bbob
+from vizier._src.jax import types
+from vizier.benchmarks import experimenters
 from vizier.pyvizier import converters
 
 from absl.testing import absltest
 from absl.testing import parameterized
 
 
-class DummyVectorizedStrategy(vb.VectorizedStrategy):
+class FakeVectorizedStrategy(vb.VectorizedStrategy):
+  """Dummy vectorized strategy to control convergence."""
 
-  def __init__(self, end_value: float):
-    self._end_value = end_value
+  def __init__(
+      self,
+      converter: converters.TrialToModelInputConverter,
+      good_value: float = 1.0,
+      bad_value: float = 0.0,
+      num_trial_to_converge: int = 0,
+  ):
+    self.converter = converter
+    self.good_value = good_value
+    self.bad_value = bad_value
+    self.num_trial_to_converge = num_trial_to_converge
+    self.num_trials_so_far = 0
 
-  def suggest(self) -> np.ndarray:
-    return np.ones((5, 2))
+  def init_state(
+      self,
+      seed: jax.Array,
+      n_parallel: int = 1,
+      *,
+      prior_features: Optional[vb.VectorizedOptimizerInput] = None,
+      prior_rewards: Optional[types.Array] = None,
+  ) -> None:
+    return
+
+  def suggest(
+      self,
+      seed: jax.Array,
+      state: None,
+      n_parallel: int = 1,
+  ) -> vb.VectorizedOptimizerInput:
+    continuous_output_len = sum(
+        [spec.num_dimensions for spec in self.converter.output_specs.continuous]
+    )
+    categorical_output_len = len(self.converter.output_specs.categorical)
+    shape = (1, n_parallel, continuous_output_len)
+    if self.num_trials_so_far < self.num_trial_to_converge:
+      continuous = jnp.ones(shape) * self.bad_value
+    else:
+      continuous = jnp.ones(shape) * self.good_value
+    return vb.VectorizedOptimizerInput(
+        continuous=continuous,
+        categorical=jnp.zeros(
+            (1, n_parallel, categorical_output_len), dtype=types.INT_DTYPE
+        ),
+    )
 
   @property
-  def suggestion_count(self) -> int:
-    return 5
+  def suggestion_batch_size(self) -> int:
+    return 1
 
-  @property
-  def best_results(self) -> list[vb.VectorizedStrategyResult]:
-    return [vb.VectorizedStrategyResult(np.ones(2), self._end_value)]
-
-  def update(self, rewards: np.ndarray) -> None:
+  def update(
+      self,
+      seed: jax.Array,
+      state: None,
+      batch_features: vb.VectorizedOptimizerInput,
+      batch_rewards: types.Array,
+  ) -> None:
     pass
 
 
-class DummyDesigner(vza.Designer):
+class FakeDesigner(vza.Designer):
   """Dummy designer to control convergence."""
 
-  def __init__(self,
-               search_space: vz.SearchSpace,
-               good_value: float = 0.0,
-               bad_value: float = 1.0,
-               noise: float = 0.1,
-               num_trial_to_converge: int = 0):
+  def __init__(
+      self,
+      search_space: vz.SearchSpace,
+      *,
+      good_value: float = 1.0,
+      bad_value: float = 0.0,
+      noise: float = 0.1,
+      num_trial_to_converge: int = 0,
+      seed: Optional[int] = None,
+  ):
     self.search_space = search_space
     self.good_value = good_value
     self.bad_value = bad_value
@@ -65,11 +116,15 @@ class DummyDesigner(vza.Designer):
     self.num_trial_to_converge = num_trial_to_converge
     self.num_trials_so_far = 0
 
-  def update(self, delta: vza.CompletedTrials) -> None:
-    self.num_trials_so_far += len(delta.completed)
+  def update(
+      self, completed: vza.CompletedTrials, all_active: vza.ActiveTrials
+  ) -> None:
+    del all_active
+    self.num_trials_so_far += len(completed.trials)
 
-  def suggest(self,
-              count: Optional[int] = None) -> Sequence[vz.TrialSuggestion]:
+  def suggest(
+      self, count: Optional[int] = None
+  ) -> Sequence[vz.TrialSuggestion]:
     if self.num_trials_so_far < self.num_trial_to_converge:
       parameters = {
           param.name: self.bad_value + self.noise * np.random.uniform()
@@ -86,35 +141,56 @@ class DummyDesigner(vza.Designer):
 class EfficiencyConvergenceTest(absltest.TestCase):
 
   def test_comparison(self):
-    problem = bbob.DefaultBBOBProblemStatement(3)
-    experimenter = benchmarks.NumpyExperimenter(bbob.Sphere, problem)
+    experimenter = experimenters.BBOBExperimenterFactory('Sphere', 3)()
 
     num_trials = 20
 
-    def _baseline_designer(problem: vz.ProblemStatement) -> vza.Designer:
-      return DummyDesigner(
-          problem.search_space, num_trial_to_converge=num_trials)
+    def _baseline_designer(
+        problem: vz.ProblemStatement, seed: Optional[int] = None
+    ) -> vza.Designer:
+      return FakeDesigner(
+          problem.search_space,
+          num_trial_to_converge=num_trials,
+          good_value=0.0,
+          bad_value=1.0,
+          seed=seed,
+      )
 
-    def _good_designer(problem: vz.ProblemStatement) -> vza.Designer:
-      return DummyDesigner(
-          problem.search_space, num_trial_to_converge=int(num_trials / 4))
+    def _good_designer(
+        problem: vz.ProblemStatement, seed: Optional[int] = None
+    ) -> vza.Designer:
+      return FakeDesigner(
+          problem.search_space,
+          good_value=0.0,
+          bad_value=1.0,
+          num_trial_to_converge=int(num_trials / 4),
+          seed=seed,
+      )
 
     comparator = comparator_runner.EfficiencyComparisonTester(
-        num_trials=num_trials, num_repeats=5)
+        num_trials=num_trials, num_repeats=5
+    )
     comparator.assert_better_efficiency(
         benchmarks.DesignerBenchmarkStateFactory(
-            experimenter=experimenter, designer_factory=_good_designer),
+            experimenter=experimenter, designer_factory=_good_designer
+        ),
         benchmarks.DesignerBenchmarkStateFactory(
-            experimenter=experimenter, designer_factory=_baseline_designer),
-        score_threshold=0.0)
+            experimenter=experimenter, designer_factory=_baseline_designer
+        ),
+        score_threshold=0.3,
+    )
 
     # Test that our baseline is worse.
     with self.assertRaises(comparator_runner.FailedComparisonTestError):  # pylint: disable=g-error-prone-assert-raises
       comparator.assert_better_efficiency(
           benchmarks.DesignerBenchmarkStateFactory(
-              experimenter=experimenter, designer_factory=_baseline_designer),
+              experimenter=experimenter, designer_factory=_baseline_designer
+          ),
           benchmarks.DesignerBenchmarkStateFactory(
-              experimenter=experimenter, designer_factory=_good_designer))
+              experimenter=experimenter, designer_factory=_good_designer
+          ),
+          score_threshold=-0.1,
+      )
 
 
 class SimpleRegretConvergenceRunnerTest(parameterized.TestCase):
@@ -122,59 +198,104 @@ class SimpleRegretConvergenceRunnerTest(parameterized.TestCase):
 
   def setUp(self):
     super(SimpleRegretConvergenceRunnerTest, self).setUp()
-    problem = bbob.DefaultBBOBProblemStatement(3)
-    self.experimenter = benchmarks.NumpyExperimenter(bbob.Sphere, problem)
-    self.converter = converters.TrialToArrayConverter.from_study_config(problem)
+    self.experimenter = experimenters.BBOBExperimenterFactory('Sphere', 3)()
+    self.converter = converters.TrialToModelInputConverter.from_problem(
+        self.experimenter.problem_statement()
+    )
 
   @parameterized.parameters(
       {
           'candidate_num_trials': 1,
-          'candidate_end_value': 5.0,
-          'should_pass': True
-      }, {
+          'candidate_x_value': 5.0,
+          'goal': vz.ObjectiveMetricGoal.MAXIMIZE,
+          'should_pass': True,
+      },
+      {
           'candidate_num_trials': 100,
-          'candidate_end_value': 5.0,
-          'should_pass': True
-      }, {
+          'candidate_x_value': 5.0,
+          'goal': vz.ObjectiveMetricGoal.MAXIMIZE,
+          'should_pass': True,
+      },
+      {
           'candidate_num_trials': 1,
-          'candidate_end_value': 0.0,
-          'should_pass': False
-      }, {
+          'candidate_x_value': 0.0,
+          'goal': vz.ObjectiveMetricGoal.MAXIMIZE,
+          'should_pass': False,
+      },
+      {
           'candidate_num_trials': 100,
-          'candidate_end_value': 0.0,
-          'should_pass': False
-      })
-  def test_designer_convergence(self, candidate_num_trials, candidate_end_value,
-                                should_pass):
-
-    def better_designer_factory(problem):
-      return DummyDesigner(
+          'candidate_x_value': 0.0,
+          'goal': vz.ObjectiveMetricGoal.MAXIMIZE,
+          'should_pass': False,
+      },
+      {
+          'candidate_num_trials': 1,
+          'candidate_x_value': 5.0,
+          'goal': vz.ObjectiveMetricGoal.MINIMIZE,
+          'should_pass': False,
+      },
+      {
+          'candidate_num_trials': 100,
+          'candidate_x_value': 5.0,
+          'goal': vz.ObjectiveMetricGoal.MINIMIZE,
+          'should_pass': False,
+      },
+      {
+          'candidate_num_trials': 1,
+          'candidate_x_value': 0.0,
+          'goal': vz.ObjectiveMetricGoal.MINIMIZE,
+          'should_pass': True,
+      },
+      {
+          'candidate_num_trials': 100,
+          'candidate_x_value': 0.0,
+          'goal': vz.ObjectiveMetricGoal.MINIMIZE,
+          'should_pass': True,
+      },
+  )
+  def test_designer_convergence(
+      self, candidate_num_trials, candidate_x_value, goal, should_pass
+  ):
+    def _better_designer_factory(problem, seed):
+      return FakeDesigner(
           search_space=problem.search_space,
-          good_value=candidate_end_value,
+          good_value=candidate_x_value,
           bad_value=0.0,
-          noise=0.0)
+          noise=0.0,
+          seed=seed,
+      )
 
-    def baseline_designer_factory(problem):
-      return DummyDesigner(
+    def _baseline_designer_factory(problem, seed):
+      return FakeDesigner(
           search_space=problem.search_space,
-          good_value=0.0,
-          bad_value=0.0,
-          noise=0.0)
+          good_value=1.0,
+          bad_value=1.0,
+          noise=0.0,
+          seed=seed,
+      )
 
     baseline_benchmark_state_factory = benchmarks.DesignerBenchmarkStateFactory(
         experimenter=self.experimenter,
-        designer_factory=baseline_designer_factory)
+        designer_factory=_baseline_designer_factory,
+    )
 
-    candidate_benchmark_state_factory = benchmarks.DesignerBenchmarkStateFactory(
-        experimenter=self.experimenter,
-        designer_factory=better_designer_factory)
+    candidate_benchmark_state_factory = (
+        benchmarks.DesignerBenchmarkStateFactory(
+            experimenter=self.experimenter,
+            designer_factory=_better_designer_factory,
+        )
+    )
 
     simple_regret_test = comparator_runner.SimpleRegretComparisonTester(
         baseline_num_trials=1000,
         candidate_num_trials=candidate_num_trials,
+        baseline_suggestion_batch_size=1,
+        candidate_suggestion_batch_size=1,
         baseline_num_repeats=5,
         candidate_num_repeats=5,
-        alpha=0.05)
+        alpha=0.05,
+        goal=goal,
+    )
 
     if should_pass:
       simple_regret_test.assert_benchmark_state_better_simple_regret(
@@ -183,64 +304,83 @@ class SimpleRegretConvergenceRunnerTest(parameterized.TestCase):
       )
     else:
       with self.assertRaises(  # pylint: disable=g-error-prone-assert-raises
-          comparator_runner.FailedSimpleRegretConvergenceTestError):
+          comparator_runner.FailedSimpleRegretConvergenceTestError
+      ):
         simple_regret_test.assert_benchmark_state_better_simple_regret(
             baseline_benchmark_state_factory,
             candidate_benchmark_state_factory,
         )
 
-  @parameterized.parameters({
-      'candidate_end_value': 5.0,
-      'should_pass': True
-  }, {
-      'candidate_end_value': 5.0,
-      'should_pass': True
-  }, {
-      'candidate_end_value': 0.0,
-      'should_pass': False
-  }, {
-      'candidate_end_value': 0.0,
-      'should_pass': False
-  })
-  def test_optimizer_convergence(self, candidate_end_value, should_pass):
-
-    score_fn = lambda x: np.sum(x, axis=-1)
+  @parameterized.parameters(
+      {
+          'candidate_x_value': 5.0,
+          'goal': vz.ObjectiveMetricGoal.MAXIMIZE,
+          'should_pass': True,
+      },
+      {
+          'candidate_x_value': 0.0,
+          'goal': vz.ObjectiveMetricGoal.MAXIMIZE,
+          'should_pass': False,
+      },
+      {
+          'candidate_x_value': 5.0,
+          'goal': vz.ObjectiveMetricGoal.MINIMIZE,
+          'should_pass': False,
+      },
+      {
+          'candidate_x_value': 0.0,
+          'goal': vz.ObjectiveMetricGoal.MINIMIZE,
+          'should_pass': True,
+      },
+  )
+  def test_optimizer_convergence(self, candidate_x_value, goal, should_pass):
+    score_fn = lambda x, _: jnp.sum(x.continuous.padded_array, axis=-1)
     simple_regret_test = comparator_runner.SimpleRegretComparisonTester(
         baseline_num_trials=100,
         candidate_num_trials=100,
+        baseline_suggestion_batch_size=1,
+        candidate_suggestion_batch_size=1,
         baseline_num_repeats=5,
         candidate_num_repeats=5,
-        alpha=0.05)
+        alpha=0.05,
+        goal=goal,
+    )
 
     # pylint: disable=unused-argument
-    def baseline_strategy_factory(converter, count):
-      return DummyVectorizedStrategy(end_value=1.0)
+    def _baseline_strategy_factory(converter, suggestion_batch_size):
+      return FakeVectorizedStrategy(
+          converter=converter,
+          good_value=1.0,
+          bad_value=1.0,
+          num_trial_to_converge=0,
+      )
 
       # pylint: disable=unused-argument
-    def candidate_strategy_factory(converter, count):
-      return DummyVectorizedStrategy(end_value=candidate_end_value)
 
-    baseline_optimizer = vb.VectorizedOptimizer(
-        strategy_factory=baseline_strategy_factory)
-
-    candidate_optimizer = vb.VectorizedOptimizer(
-        strategy_factory=candidate_strategy_factory)
+    def _candidate_strategy_factory(converter, suggestion_batch_size):
+      return FakeVectorizedStrategy(
+          converter=converter,
+          good_value=candidate_x_value,
+          bad_value=0.0,
+          num_trial_to_converge=0,
+      )
 
     if should_pass:
       simple_regret_test.assert_optimizer_better_simple_regret(
           self.converter,
           score_fn,
-          baseline_optimizer,
-          candidate_optimizer,
+          _baseline_strategy_factory,
+          _candidate_strategy_factory,
       )
     else:
       with self.assertRaises(  # pylint: disable=g-error-prone-assert-raises
-          comparator_runner.FailedSimpleRegretConvergenceTestError):
+          comparator_runner.FailedSimpleRegretConvergenceTestError
+      ):
         simple_regret_test.assert_optimizer_better_simple_regret(
             self.converter,
             score_fn,
-            baseline_optimizer,
-            candidate_optimizer,
+            _baseline_strategy_factory,
+            _candidate_strategy_factory,
         )
 
 

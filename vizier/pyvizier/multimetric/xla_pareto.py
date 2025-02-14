@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """XLA-enabled algorithm for determining pareto optimality."""
 # pylint: disable=unused-import
-
+from vizier._src.jax.xla_pareto import is_frontier
 from vizier._src.jax.xla_pareto import jax_cum_hypervolume_origin
 from vizier._src.jax.xla_pareto import JaxParetoOptimalAlgorithm
+from vizier._src.jax.xla_pareto import pareto_rank

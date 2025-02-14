@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 # limitations under the License.
 
 #!/bin/bash
-sudo apt-get install -y libprotobuf-dev  # Needed for proto libraries.
 
 # Installs standard Google protos, then builds Vizier specific protos.
 set -x
@@ -29,8 +28,8 @@ cd "$THIS_DIR"
 TMPDIR=$(mktemp -d)
 (cd "$TMPDIR"
   wget https://github.com/googleapis/googleapis/archive/master.tar.gz
-  tar xzvf master.tar.gz
-  cp -r googleapis-master/google $THIS_DIR/vizier/service/
+  tar xzf master.tar.gz
+  cp -r googleapis-master/google $THIS_DIR/vizier/_src/service/
 )
 rm -rf "$TMPDIR"
 
@@ -40,9 +39,9 @@ rm -rf "$TMPDIR"
 for proto_name in *.proto
 do
   python3 -m grpc_tools.protoc \
-    --python_out=vizier/service \
-    --grpc_python_out=vizier/service \
-    --proto_path=vizier/service \
+    --python_out=vizier/_src/service \
+    --grpc_python_out=vizier/_src/service \
+    --proto_path=vizier/_src/service \
     --experimental_allow_proto3_optional \
-    vizier/service/$proto_name
+    vizier/_src/service/$proto_name
 done

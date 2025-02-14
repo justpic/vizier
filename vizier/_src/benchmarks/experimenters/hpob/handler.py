@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """HPOB Handler copied (with slightly modified filesystem logic) from
 
@@ -75,9 +77,9 @@ class HPOBHandler:
                         only_test=True,
                         augmented_train=False):
 
-    meta_train_data = None
-    meta_validation_data = None
-    meta_test_data = None
+    meta_train_data = {}
+    meta_validation_data = {}
+    meta_test_data = {}
 
     print("Loading data...")
     meta_train_augmented_path = os.path.join(

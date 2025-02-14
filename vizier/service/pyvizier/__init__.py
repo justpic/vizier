@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Import target for oss."""
+from __future__ import annotations
+
+"""PyVizier classes relevant for the service, including OSS-specific objects."""
 
 # TODO: Re-evalaute what to expose to users, once closed.
 # TODO: Alternatively, remove this import.
@@ -28,26 +30,28 @@ from vizier._src.pyvizier.oss.proto_converters import ParameterType
 from vizier._src.pyvizier.oss.proto_converters import ParameterValueConverter
 from vizier._src.pyvizier.oss.proto_converters import ProblemStatementConverter
 from vizier._src.pyvizier.oss.proto_converters import ScaleType
+from vizier._src.pyvizier.oss.proto_converters import StudyStateConverter
 from vizier._src.pyvizier.oss.proto_converters import SuggestConverter
 from vizier._src.pyvizier.oss.proto_converters import TrialConverter
 from vizier._src.pyvizier.oss.proto_converters import TrialSuggestionConverter
 from vizier._src.pyvizier.oss.study_config import Algorithm
-from vizier._src.pyvizier.oss.study_config import ExternalType
-from vizier._src.pyvizier.oss.study_config import ObjectiveMetricGoal
 from vizier._src.pyvizier.oss.study_config import ObservationNoise
 from vizier._src.pyvizier.oss.study_config import ParameterValueSequence
-from vizier._src.pyvizier.oss.study_config import SearchSpaceSelector
 from vizier._src.pyvizier.oss.study_config import StudyConfig
 from vizier._src.pyvizier.pythia.study import StudyDescriptor
 from vizier._src.pyvizier.pythia.study import StudyState
 from vizier._src.pyvizier.pythia.study import StudyStateInfo
 from vizier._src.pyvizier.shared.base_study_config import MetricInformation
 from vizier._src.pyvizier.shared.base_study_config import MetricsConfig
+from vizier._src.pyvizier.shared.base_study_config import ObjectiveMetricGoal
 from vizier._src.pyvizier.shared.base_study_config import ProblemStatement
-from vizier._src.pyvizier.shared.base_study_config import SearchSpace
 from vizier._src.pyvizier.shared.common import Metadata
 from vizier._src.pyvizier.shared.common import MetadataValue
+from vizier._src.pyvizier.shared.common import Namespace
+from vizier._src.pyvizier.shared.parameter_config import ExternalType
 from vizier._src.pyvizier.shared.parameter_config import ParameterConfig
+from vizier._src.pyvizier.shared.parameter_config import SearchSpace
+from vizier._src.pyvizier.shared.parameter_config import SearchSpaceSelector
 from vizier._src.pyvizier.shared.study import ProblemAndTrials
 from vizier._src.pyvizier.shared.trial import CompletedTrial
 from vizier._src.pyvizier.shared.trial import CompletedTrialWithMeasurements

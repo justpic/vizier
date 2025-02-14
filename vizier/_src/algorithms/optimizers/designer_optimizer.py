@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Wraps Designer as a gradient-free optimizer."""
 
-from typing import Callable, List, TypeVar
+from typing import Callable, List, TypeVar, Sequence
 
 from absl import logging
 from vizier import pythia
@@ -46,13 +48,15 @@ class DesignerAsOptimizer(base.GradientFreeOptimizer):
     self._batch_size = batch_size
     self._num_evaluations = num_evaluations
 
-  def optimize(self,
-               score_fn: base.BatchTrialScoreFunction,
-               problem: vz.ProblemStatement,
-               *,
-               count: int = 1,
-               budget_factor: float = 1.0,
-               **kwargs) -> List[vz.Trial]:
+  def optimize(
+      self,
+      score_fn: base.BatchTrialScoreFunction,
+      problem: vz.ProblemStatement,
+      *,
+      count: int = 1,
+      budget_factor: float = 1.0,
+      seed_candidates: Sequence[vz.TrialSuggestion] = tuple(),
+  ) -> List[vz.Trial]:
     # Use the in-ram supporter as a pseudo-client for running a study in RAM.
     study = pythia.InRamPolicySupporter(problem)
 
@@ -69,11 +73,20 @@ class DesignerAsOptimizer(base.GradientFreeOptimizer):
       if not trials:
         break
       scores = score_fn(trials)
+      # Check that scores are (N, 1) arrays as in BatchTrialScoreFunction.
+      for k, v in scores.items():
+        if v.shape != (len(trials), 1):
+          raise ValueError(
+              f'Incorrect shape {v.shape} in scores {scores[k]}\n'
+              f'Expected shape is {(len(trials), 1)}'
+          )
       for i, trial in enumerate(trials):
         # TODO: Decide what to do with NaNs scores.
         trial.complete(
             vz.Measurement({k: v[i].item() for k, v in scores.items()}))
-      self._designer.update(abstractions.CompletedTrials(trials))
+      self._designer.update(
+          abstractions.CompletedTrials(trials), abstractions.ActiveTrials()
+      )
     logging.info(
         'Finished running the optimization study. Extracting the best trials...'
     )

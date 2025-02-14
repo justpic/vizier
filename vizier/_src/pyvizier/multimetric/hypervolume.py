@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Hypervolume calculation (stochastic approximation) functions."""
 import math
@@ -154,8 +156,10 @@ class ParetoFrontier:
         dimension / 2) / math.gamma(dimension / 2 + 1) / 2**dimension
     for begin, end in zip(idx[1:], idx[:-1]):
       vectors = self._vectors[begin:end, :]
-      approx_hypervolume += self._cum_hypervolume_base(
-          points, vectors) * unit_hypersphere_volume
+      # Apply maximization because Jax -> NP conversion can be imprecise.
+      approx_hypervolume += np.maximum.accumulate(
+          self._cum_hypervolume_base(points, vectors) * unit_hypersphere_volume
+      )
 
     if is_cumulative:
       return np.array(approx_hypervolume / num_shards)

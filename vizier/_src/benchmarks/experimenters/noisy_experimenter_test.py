@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Tests for noisy_experimenter."""
+
+import numpy as np
 
 from vizier import pyvizier
 from vizier._src.benchmarks.experimenters import noisy_experimenter
@@ -55,16 +59,18 @@ class NoisyExperimenterTest(parameterized.TestCase):
 
     exptr.evaluate([t])
     metric_name = exptr.problem_statement().metric_information.item().name
-    unnoised_value = t.final_measurement.metrics[metric_name].value
+    unnoised_value = t.final_measurement_or_die.metrics[metric_name].value
 
     noisy_exptr.evaluate([t])
-    noised_value = t.final_measurement.metrics[metric_name].value
+    noised_value = t.final_measurement_or_die.metrics[metric_name].value
     self.assertEqual(unnoised_value - 1, noised_value)
     self.assertEqual(
         unnoised_value,
-        t.final_measurement.metrics[metric_name + '_before_noise'].value)
+        t.final_measurement_or_die.metrics[metric_name + '_before_noise'].value,
+    )
 
   @parameterized.named_parameters(
+      ('NO_NOISE', 'NO_NOISE', 1e-5),
       ('SEVERE_ADDITIVE_GAUSSIAN', 'SEVERE_ADDITIVE_GAUSSIAN', 3),
       ('MODERATE_ADDITIVE_GAUSSIAN', 'MODERATE_ADDITIVE_GAUSSIAN', 0.3),
       ('LIGHT_ADDITIVE_GAUSSIAN', 'LIGHT_ADDITIVE_GAUSSIAN', 0.03),
@@ -75,12 +81,13 @@ class NoisyExperimenterTest(parameterized.TestCase):
       ('MODERATE_SELDOM_CAUCHY', 'MODERATE_SELDOM_CAUCHY', 10.3),
       ('SEVERE_SELDOM_CAUCHY', 'SEVERE_SELDOM_CAUCHY', 100.3),
   )
-  def testGaussianNoiseApply(self, noise, delta):
+  def testGaussianNoiseApply(self, noise: str, delta: float):
     dim = 2
     exptr = numpy_experimenter.NumpyExperimenter(
         bbob.Sphere, bbob.DefaultBBOBProblemStatement(dim))
-    noisy_exptr = noisy_experimenter.NoisyExperimenter(
-        exptr=exptr, noise_type=noise)
+    noisy_exptr = noisy_experimenter.NoisyExperimenter.from_type(
+        exptr=exptr, noise_type=noise
+    )
 
     parameters = exptr.problem_statement().search_space.parameters
     t = pyvizier.Trial(parameters={
@@ -89,19 +96,60 @@ class NoisyExperimenterTest(parameterized.TestCase):
 
     exptr.evaluate([t])
     metric_name = exptr.problem_statement().metric_information.item().name
-    unnoised_value = t.final_measurement.metrics[metric_name].value
+    unnoised_value = t.final_measurement_or_die.metrics[metric_name].value
 
     noisy_exptr.evaluate([t])
-    noised_value1 = t.final_measurement.metrics[metric_name].value
+    noised_value1 = t.final_measurement_or_die.metrics[metric_name].value
 
     noisy_exptr.evaluate([t])
-    noised_value2 = t.final_measurement.metrics[metric_name].value
+    noised_value2 = t.final_measurement_or_die.metrics[metric_name].value
 
     # Seldom noise is only injected sporadically.
-    if 'SELDOM' not in noise:
+    if 'SELDOM' not in noise and noise != 'NO_NOISE':
       self.assertNotEqual(noised_value1, noised_value2)
     self.assertAlmostEqual(noised_value1, unnoised_value, delta=delta)
     self.assertAlmostEqual(noised_value2, unnoised_value, delta=delta)
+
+  def testSeedDeterminism(self):
+    dim = 2
+    seed = 7
+    exptr = numpy_experimenter.NumpyExperimenter(
+        bbob.Sphere, bbob.DefaultBBOBProblemStatement(dim)
+    )
+    noisy_exptr = noisy_experimenter.NoisyExperimenter.from_type(
+        exptr=exptr, noise_type='SEVERE_UNIFORM', seed=seed
+    )
+
+    parameters = exptr.problem_statement().search_space.parameters
+    t = pyvizier.Trial(
+        parameters={
+            param.name: float(index) for index, param in enumerate(parameters)
+        }
+    )
+    metric_name = exptr.problem_statement().metric_information.item().name
+
+    noise_value_sequence = []
+    for _ in range(10):
+      noisy_exptr.evaluate([t])
+      noise_value_sequence.append(
+          t.final_measurement_or_die.metrics[metric_name].value
+      )
+
+    # Global NP seed should not affect randomness.
+    np.random.seed(0)
+
+    noisy_exptr = noisy_experimenter.NoisyExperimenter.from_type(
+        exptr=exptr, noise_type='SEVERE_UNIFORM', seed=seed
+    )
+    noise_value_sequence_after = []
+    for _ in range(10):
+      noisy_exptr.evaluate([t])
+      noise_value_sequence_after.append(
+          t.final_measurement_or_die.metrics[metric_name].value
+      )
+    self.assertSequenceAlmostEqual(
+        noise_value_sequence, noise_value_sequence_after
+    )
 
 
 if __name__ == '__main__':

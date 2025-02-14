@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Common classes shared between Study and Trial."""
 
@@ -25,11 +27,12 @@ import attr
 from google.protobuf import any_pb2
 from google.protobuf.message import Message
 
-M = TypeVar('M', bound=Message)
+_M = TypeVar('_M', bound=Message)
 T = TypeVar('T')
 T1 = TypeVar('T1')
 T2 = TypeVar('T2')
 MetadataValue = Union[str, any_pb2.Any, Message]
+_V = TypeVar('_V', bound=MetadataValue)
 
 # Namespace Encoding.
 #
@@ -87,15 +90,24 @@ def _parse(arg: str) -> Tuple[str, ...]:
 class Namespace(abc.Sequence):
   r"""A namespace for the Metadata class.
 
-  Namespaces form a tree; a particular namespace can be thought of as a tuple of
-  namespace components.
+  Namespaces represent a tree of Metadata; each namespace object can be thought
+  of as a tuple of components obtained by walking the tree from the root.
+  This makes it easy to give each part of your algorithm its own namespace,
+  to avoid name collisions.  E.g. if your algorithm A uses sub-algorithms B and
+  C, you might have namespaces ":A", ":A:B", and ":A:C".
 
-  You can create a Namespace from a string, with Namespace.decode(s), where
-  the string is parsed into components, splitting at colons; decode('a:b') gives
-  you a two-component namespace: ('a', 'b').
-  Or, you can create that same Namespace from a tuple of strings/components
-  e.g. by constructing Namespace(('a', 'b')).  In the tuple case, the strings
-  are not parsed and colons are ordinary characters.
+  NOTE: The empty namespace is writeable by users via a RPC in Vizier's
+    user-facing API; other namespaces are writeable only by Pythia algorithms.
+    (Users can read all namespaces.) So, to minimize collisions, please avoid
+    the empty namespace unless your algorithm needs to read user data.
+
+  You can create a Namespace from a tuple of strings, e.g.
+  Namespace(('a', 'b')).  Or, you can create a Namespace from a single string
+  with Namespace.decode(s); this parses the string into components, splitting at
+  colons.  For instance Namespace.decode(':a:b') gives you a two-component
+  namespace, equivalent to Namespace(('a', 'b')).
+  (Note that in the tuple case, the strings are not parsed and colons are
+  treated as ordinary characters.)
 
   TLDR: If you decode() a namespace from a string, then ":" is a
     reserved character, but when constructing from a tuple, there are no
@@ -105,10 +117,10 @@ class Namespace(abc.Sequence):
   * Initial colons don't matter: Namespace.decode(':a') == Namespace('a');
     this is a single-component namespace.
   * Colons separate components:
-    Namespace.decode('a:b') == Namespace(['a', 'b']).
+    Namespace.decode('a:b') == Namespace(('a', 'b')).
     (This is a two-component namespace.)
   * Colons are encoded as r'\:':
-    Namespace.decode('a\\:b') == Namespace(('a:b')).
+    Namespace.decode('a\\:b') == Namespace(('a:b',)).
     (This is a single-component namespace.)
 
   Conversions: For a Namespace x,
@@ -124,7 +136,7 @@ class Namespace(abc.Sequence):
     """Generates a Namespace from its component strings.
 
     Args:
-      arg: a tuple representation of a namespace.
+      arg: typically, a tuple of strings.
     """
     arg = tuple(arg)
     self.__attrs_init__(as_tuple=arg)
@@ -138,8 +150,8 @@ class Namespace(abc.Sequence):
     For a Namespace x, Namespace.decode(x.encode()) == x.
 
     Args:
-      s: A string where ':' separates namespace components, and colon is
-        escaped as r'\:'.
+      s: A string where ':' separates namespace components, and colon is escaped
+        as r'\:'.
 
     Returns:
       A namespace.
@@ -155,7 +167,8 @@ class Namespace(abc.Sequence):
       Colons are escaped, then Namespace components are joined by colons.
     """
     return ''.join(
-        [':' + c.translate(self._ns_repr_table) for c in self._as_tuple])
+        [':' + c.translate(self._ns_repr_table) for c in self._as_tuple]
+    )
 
   def __len__(self) -> int:
     """Number of components (elements of the tuple form)."""
@@ -188,64 +201,68 @@ class Namespace(abc.Sequence):
     return f'Namespace({self.encode()})'
 
   def startswith(self, prefix: Iterable[str]) -> bool:
-    """Returns True if this namespace starts with prefix."""
+    """Returns True if this namespace starts with $prefix.
+
+    So, if the current namespace is "a:b:c", then startswith() will return True
+    when called with prefix=(), ('a',), ('a', 'b'), and ('a', 'b', 'c');
+    otherwise False.
+
+    Args:
+      prefix: namespace components or a Namespace object.
+
+    Returns:
+    """
     ns_prefix = Namespace(prefix)
-    return self[:len(ns_prefix)] == ns_prefix
+    return self[: len(ns_prefix)] == ns_prefix
 
 
 class _MetadataSingleNameSpace(Dict[str, MetadataValue]):
   """Stores metadata associated with one namespace."""
+
   pass
 
 
 class Metadata(abc.MutableMapping):
-  """Metadata class.
+  """Metadata class: a key-value dict-like mapping, with namespaces.
 
-  This is the main interface for reading metadata from a Trial (writing metadata
-  should typically be done via the MetadataUpdateContext class.)
+  This is the main interface for reading metadata from a Trial or StudyConfig,
+  or adding metadata to a Trial/StudyConfig.  Loosely speaking, within each
+  namespace, Metadata acts like a dictionary mapping from a string key to a
+  string or protobuf. (See more about namespaces below.)
 
-  This behaves like a str->str dict, within a given namespace.
+  Metadata can be initialized from a dictionary:
     mm = Metadata({'foo': 'Foo'})
+  And items can be retrieved with:
     mm.get('foo')  # Returns 'Foo'
     mm['foo']      # Returns 'Foo'
-    mm['bar'] = 'Bar'
-    mm.update({'a': 'A'}, gleep='Gleep')
+
+  More items can be added with:
+    mm = Metadata({'foo': 'Foo'})
+    mm['bar'] = 'Bar'  # Add a single item
+    mm.update({'a': 'A'}, gleep='Gleep')  # Add two items
+
+  By default, items are added to the root/empty namespace.
+  Vizier users can only add metadata to the empty namespace (the Vizier service
+  will reject attempts by users to add metadata elsewhere); Pythia algorithms
+  can add metadata to any namespace, but should normally work in a single unique
+  namespace, and should avoid the root namespace, unless they intend to
+  pass data to/from Vizier users.
 
   1. Keys are namespaced. Each Metadata object only interacts with one
-    Namespace, but a metadata object and its children share a
-    common set of (namespace, key, value) triplets.
+    Namespace.
 
-    Namespaces form a tree, and you can walk down the tree.  There are two
-    namespace operators: ns(s) which adds component(s) on to the namespace, and
-    abs_ns() which specifies the entire namespace.
+    Namespaces form a tree, and you can walk down the tree.
 
-    A Metadata() object is always created at the root of the namespace tree,
-    and the root is special (it's the only namespace that Vizier users can write
-    or conveniently read).  Pythia algorithm developers should avoid the root
-    namespace, unless they intend to pass data to/from Vizier users.
+    NOTE ns(s: str) takes one step down the namespace tree. For nearly all
+    practical purposes, ignore abs_ns() which is only used for conversions
+    to and from protobufs.
 
     mm = Metadata({'foo': 'foofoo'})
+    # $mm is created with its current namespace equal to the root/empty
+    # namespace.
     mm.ns('NewName')['bar'] = 'Bar'
-    mm['foo']               # Returns 'foofoo'
-    mm['bar']               # Throws a KeyError
-    mm.ns('NewName')['foo'] # Throws a KeyError
-    mm.ns('NewName')['bar'] # Returns 'Bar'
-    mm.ns('NewName').get('bar') # Returns 'Bar'
-
-    # Use of abs_ns().
-    mm = Metadata()
-    mm.abs_ns(Namespace(('NewName',)))['bar'] = 'Bar'
-    mm.abs_ns(Namespace(('NewName',)))  # returns 'Bar'
-
-    # Multi-component namespaces.
-    mm = Metadata()
-    mm.ns('a').ns('b')['foo'] = 'AB-foo'
-    mm.ns('a')['foo'] = 'A-foo'
-    mm['foo']          # Throws a KeyError
-    mm.ns('a')['foo']  # returns 'A-foo'
-    mm.ns('a').ns('b')['foo']  # returns 'AB-foo'
-    mm.abs_ns(Namespace(('a', 'b'))).get('foo')  # Returns 'ab-foo'
-    mm.abs_ns(Namespace.decode('a:b')).get('foo')  # Returns 'ab-foo'
+    # We've added an item in the ":NewName" namespace, but $mm's current
+    # namespace is unchanged.
 
   2. Values can be protobufs. If `metadata['foo']` is an instance of `MyProto`
     proto message or an `Any` proto that packs a `MyProto` message, then the
@@ -283,9 +300,13 @@ class Metadata(abc.MutableMapping):
       # or protos.
   """
 
-  def __init__(self, *args: Union[Dict[str, MetadataValue],
-                                  Iterable[Tuple[str, MetadataValue]]],
-               **kwargs: MetadataValue):
+  def __init__(
+      self,
+      *args: Union[
+          Dict[str, MetadataValue], Iterable[Tuple[str, MetadataValue]]
+      ],
+      **kwargs: MetadataValue,
+  ):
     """Construct; this follows dict(), and puts data in the root namespace.
 
     You can pass it a dict, or an object that yields (key, value)
@@ -295,59 +316,49 @@ class Metadata(abc.MutableMapping):
       *args: A dict or an iterable the yields key-value pairs.
       **kwargs: key=value pairs to be added to the specified namespace.
     """
-    self._stores: DefaultDict[
-        Namespace, _MetadataSingleNameSpace] = collections.defaultdict(
-            _MetadataSingleNameSpace)
+    self._stores: DefaultDict[Namespace, _MetadataSingleNameSpace] = (
+        collections.defaultdict(_MetadataSingleNameSpace)
+    )
     self._namespace = Namespace()
     self._store = self._stores[self._namespace]
     self._store.update(*args, **kwargs)
 
-  def abs_ns(self, namespace: Iterable[str] = ()) -> 'Metadata':
-    """Switches to a specified absolute namespace.
-
-    All the Metadata object's data is shared between $self and the returned
-    object, but the new Metadata object will have a different default
-    namespace.
-
-    Args:
-      namespace: a list of Namespace components.  (Defaults to the root, empty
-      Namespace.)
-
-    Returns:
-      A new Metadata object in the specified namespace; the new object shares
-      data (except the namespace) with $self.
-    """
-    return self._copy_core(Namespace(namespace))
-
   def ns(self, component: str) -> 'Metadata':
-    r"""Switches to a deeper namespace by appending a component.
+    r"""Switches to a deeper namespace by appending one component.
 
-    All the metadata is shared between $self and the returned value, but they
-    have a different current namespace.
+    The entire tree of metadata is shared between $self and the returned value,
+    but the returned value will have a deeper current namespace.  ($self is not
+    modified.)
 
     Args:
-      component: one component to be added to the current namespace.
+      component: one component to be appended to the current namespace.
 
     Returns:
       A new Metadata object in the specified namespace; the new object shares
-      metadata (except the choice of namespace) with $self.
+      metadata with $self.
     """
     new_ns: Namespace = self._namespace + (component,)
     return self._copy_core(new_ns)
 
   def __repr__(self) -> str:
+    """Prints items in all namespaces."""
     itemlist: List[str] = []
     for namespace, store in self._stores.items():
       item_string = f'(namespace:{namespace}, items: {store})'
       itemlist.append(item_string)
-    return 'Metadata({}, current_namespace={})'.format(', '.join(itemlist),
-                                                       self._namespace.encode())
+    return 'Metadata({}, current_namespace={})'.format(
+        ', '.join(itemlist), self._namespace.encode()
+    )
 
   def __str__(self) -> str:
+    """Prints items in the current namespace."""
     return 'namespace: {} items: {}'.format(str(self._namespace), self._store)
 
-  def get_proto(self, key: str, *, cls: Type[M]) -> Optional[M]:
+  def get_proto(self, key: str, *, cls: Type[_M]) -> Optional[_M]:
     """Deprecated: use get() instead."""
+    logging.warning(
+        'Metadata.get_proto() is deprecated, prefer Metadata.get().'
+    )
     value = self._store.get(key, None)
     if value is None:
       return None
@@ -367,7 +378,8 @@ class Metadata(abc.MutableMapping):
     """Gets the metadata as type `cls`, or raises a KeyError.
 
     This acts like the square bracket operator, except that
-    it lets you specify a class.
+    it lets you specify a class; it gets the metadata from the current
+    namespace.
 
     Examples with string metadata:
       metadata = common.Metadata({'key': 'value'})
@@ -409,22 +421,22 @@ class Metadata(abc.MutableMapping):
       # `value` is an Any proto potentially packing `cls`.
       message = cls()
       if not value.Unpack(message):
-        logging.warning('Cannot unpack message to %s: %s', cls,
-                        str(value)[:100])
+        logging.warning(
+            'Cannot unpack message to %s: %s', cls, str(value)[:100]
+        )
         raise TypeError('Cannot unpack to %s' % cls)
       return message
     else:
       return cls(value)
 
-  def get(self,
-          key: str,
-          default: T1 = None,
-          *,
-          cls: Type[T2] = str) -> Union[T1, T2]:
+  def get(
+      self, key: str, default: T1 = None, *, cls: Type[T2] = str
+  ) -> Union[T1, T2]:
     """Gets the metadata as type `cls`, or $default if not present.
 
     This returns $default if the specified metadata item is not found.
     Note that there's always a default value, and the $default defaults to None.
+    This gets the data from the current namespace.
 
     For string values, this function behaves exactly like a
     regular string-to-string dict (within its namespace).
@@ -477,32 +489,34 @@ class Metadata(abc.MutableMapping):
       return default
 
   # TODO: Rename to `abs_namespaces`
-  def namespaces(self) -> Tuple[Namespace, ...]:
-    """Get all namespaces for which there is at least one key.
-
-    Returns:
-      For all `ns` in `md.namespaces()`, `md.abs_ns(ns)` is not empty.
-    """
-    return tuple([ns for ns, store in self._stores.items() if store])
+  def namespaces(self) -> List[Namespace]:
+    """List all namespaces for which there is at least one key."""
+    return [ns for ns, store in self._stores.items() if store]
 
   # TODO: Rename to `namespaces`
   def subnamespaces(self) -> Tuple[Namespace, ...]:
     """Returns relative namespaces that are at or below the current namespace.
 
-    For all `ns` in `md.subnamespaces()`, `md.abs_ns(md.current_ns() + ns)` is
-    not empty.  E.g. if namespace 'foo:bar' is non-empty, and you're in
-    namespace 'foo', then the result will contain namespace 'bar'.
+    For all `ns` in the returned value, `self.abs_ns(md.current_ns() + ns)` is
+    not empty.
+    # Examples:
+    md = Metadata()
+    md.ns('foo').ns('bar')['A'] = 'b'
+    md.subnamespaces() == (Namespace(['foo', 'bar']),)
+    md.ns('foo').subnamespaces() == (Namespace(['bar']),)
 
     Returns:
-      For namespaces that begin with the current namespace and are
+      For all namespaces that begin with the current namespace and are
       non-empty, this returns a namespace object that contains the relative
       path from the current namespace.
     """
-    return tuple([
-        Namespace(ns[len(self._namespace):])
-        for ns, store in self._stores.items()
-        if store and ns.startswith(self._namespace)
-    ])
+    return tuple(
+        [
+            Namespace(ns[len(self._namespace) :])
+            for ns, store in self._stores.items()
+            if store and ns.startswith(self._namespace)
+        ]
+    )
 
   def current_ns(self) -> Namespace:
     """Displays the object's current Namespace."""
@@ -521,6 +535,22 @@ class Metadata(abc.MutableMapping):
     for ns in self.namespaces():
       for k, v in self.abs_ns(ns).items():
         yield (ns, k, v)
+
+  def items_by_cls(self, *, cls: Type[_V]) -> Iterator[Tuple[str, _V]]:
+    """Yields an iterator over items whose type=$cls in the current namespace.
+
+    This iterates through the metadata items in the current namespace, like
+    __iter__(), except that it only returns items of the specified type.
+
+    Args:
+      cls: What type of objects to filter for?
+
+    Yields:
+      Tuple of (key, value).
+    """
+    for k_v in self.items():
+      if isinstance(k_v[1], cls):
+        yield k_v
 
   # START OF abstract methods inherited from `MutableMapping` base class.
   def __getitem__(self, key: str) -> MetadataValue:
@@ -556,6 +586,61 @@ class Metadata(abc.MutableMapping):
 
   # END OF Abstract methods inherited from `MutableMapping` base class.
 
+  def abs_ns(self, namespace: Iterable[str] = ()) -> 'Metadata':
+    """Returns a metadata object set to the specified absolute namespace.
+
+    NOTE Prefer using ns() instead in most cases.
+
+    abs_ns() jumps to the root namespace and
+    abs_ns(ns) jumps to the specified Namespace.
+
+    (NOTE: ns() and abs_ns() take different argument types!)
+    (NOTE: Neither ns() nor abs_ns() modify the Metadata object they are called
+     on: they return a shallow copy that shares all metadata items, but
+     which displays a different namespace.)
+
+    # Use of abs_ns().
+    mm.abs_ns(['NewName'])  # returns 'Bar'
+    mmx = mm.ns('x')
+    mmx.abs_ns(['NewName'])  # returns 'Bar2'
+    mmx.abs_ns().get('foo')  # returns 'foofoo'
+
+    # Multi-component namespaces.
+    mm = Metadata()
+    mm.ns('a').ns('b')['foo'] = 'AB-foo'
+    mm.ns('a')['foo'] = 'A-foo'
+    mm['foo']          # Throws a KeyError
+    mm.ns('a')['foo']  # returns 'A-foo'
+    mm.ns('a').ns('b')['foo']  # returns 'AB-foo'
+    # abs_ns() can be also used:
+    mm.abs_ns(['a', 'b']).get('foo')  # Returns 'ab-foo'
+    mm.abs_ns(Namespace.decode('a:b')).get('foo')  # Returns 'ab-foo'
+
+    All the Metadata object's data is shared between $self and the returned
+    object, but the new Metadata object will have a different current
+    namespace.  (Note that $self is not modified, and the current namespace of
+    $self doesn't matter.)
+
+    NOTE: $namespace can be a Namespace object, because you can iterate over
+      a Namespace to get strings.
+
+    Args:
+      namespace: a list of Namespace components.  (Defaults to the root, empty
+        Namespace.)
+
+    Returns:
+      A new Metadata object that shares data with $self, but the current
+      namespace is one level deeper.
+    """
+    if isinstance(namespace, str):
+      raise ValueError(
+          'Passing str to abs_ns() is rarely intended and therefore '
+          'considered an error. Carefully read the class doc and prefer '
+          'using ns(). If you do decide abs_ns() is the right method, '
+          'expclitily pass abs_ns([namespace]).'
+      )
+    return self._copy_core(Namespace(namespace))
+
   def _copy_core(self, ns: Namespace) -> 'Metadata':
     """Shallow copy: metadata is shared, default namespace changes.
 
@@ -571,9 +656,13 @@ class Metadata(abc.MutableMapping):
     md._store = md._stores[md._namespace]  # pylint: disable='protected-access'
     return md
 
-  def update(self, *args: Union[Dict[str, MetadataValue],
-                                Iterable[Tuple[str, MetadataValue]]],
-             **kwargs: MetadataValue) -> None:
+  def update(
+      self,
+      *args: Union[
+          Dict[str, MetadataValue], Iterable[Tuple[str, MetadataValue]]
+      ],
+      **kwargs: MetadataValue,
+  ) -> None:
     self._store.update(*args, **kwargs)
 
   def attach(self, other: 'Metadata') -> None:
@@ -588,7 +677,7 @@ class Metadata(abc.MutableMapping):
 
     So, if we have
     other = Metadata()
-    other.abs_ns(Namespace.(('x', 'y', 'z'))['foo'] = 'bar'
+    other.abs_ns(('x', 'y', 'z'))['foo'] = 'bar'
     m = Metadata()
     m.ns('w').attach(other.ns('x'))
     then
@@ -599,4 +688,5 @@ class Metadata(abc.MutableMapping):
     """
     for ns in other.subnamespaces():
       self._stores[self._namespace + ns].update(
-          other.abs_ns(other.current_ns() + ns))
+          other.abs_ns(other.current_ns() + ns)
+      )

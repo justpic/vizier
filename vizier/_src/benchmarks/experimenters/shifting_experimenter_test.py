@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for shifting_experimenter."""
 
@@ -54,26 +56,29 @@ class ShiftingExperimenterTest(parameterized.TestCase):
     t = pyvizier.Trial(parameters={
         param.name: float(index) for index, param in enumerate(parameters)
     })
-    t_shifted = pyvizier.Trial(parameters={
-        param.name: float(index) + shift
-        for index, param in enumerate(parameters)
-    })
+    t_shifted = pyvizier.Trial(
+        parameters={
+            param.name: float(index) - shift
+            for index, param in enumerate(parameters)
+        }
+    )
 
     exptr.evaluate([t_shifted])
     shifted_exptr.evaluate([t])
     metric_name = exptr.problem_statement().metric_information.item().name
 
     self.assertAlmostEqual(
-        t_shifted.final_measurement.metrics[metric_name].value,
-        t.final_measurement.metrics[metric_name].value)
+        t_shifted.final_measurement_or_die.metrics[metric_name].value,
+        t.final_measurement_or_die.metrics[metric_name].value,
+    )
     self.assertEqual(t.status, t_shifted.status)
 
     # Check parameter bounds are shifted.
     shifted_parameters = shifted_exptr.problem_statement(
     ).search_space.parameters
     for param, shifted_param in zip(parameters, shifted_parameters):
-      self.assertEqual(param.bounds[0], shifted_param.bounds[0])
-      self.assertEqual(param.bounds[1] - shift, shifted_param.bounds[1])
+      self.assertEqual(param.bounds[0] + shift, shifted_param.bounds[0])
+      self.assertEqual(param.bounds[1], shifted_param.bounds[1])
 
   def test_evaluate_shift(self):
     dim = 2
@@ -92,17 +97,19 @@ class ShiftingExperimenterTest(parameterized.TestCase):
     })
     t_shifted = pyvizier.Trial(
         parameters={
-            param.name: float(index) + shift[index]
+            param.name: float(index) - shift[index]
             for index, param in enumerate(parameters)
-        })
+        }
+    )
 
     exptr.evaluate([t_shifted])
     shifted_exptr.evaluate([t])
     metric_name = exptr.problem_statement().metric_information.item().name
 
     self.assertAlmostEqual(
-        t_shifted.final_measurement.metrics[metric_name].value,
-        t.final_measurement.metrics[metric_name].value)
+        t_shifted.final_measurement_or_die.metrics[metric_name].value,
+        t.final_measurement_or_die.metrics[metric_name].value,
+    )
     self.assertEqual(t.status, t_shifted.status)
     self.assertNotEqual(t.parameters, t_shifted.parameters)
 
@@ -117,13 +124,12 @@ class ShiftingExperimenterTest(parameterized.TestCase):
     # Test shift within bounds
     trial = pyvizier.Trial(parameters={'x0': 3.0, 'x1': 1.0})
     shifted_exptr._offset([trial], shift=-shift)
-    self.assertEqual(trial.parameters.as_dict(), {
-        'x0': 3.0 - 1.2,
-        'x1': 1.0 + 2.3
-    })
+    self.assertEqual(
+        trial.parameters.as_dict(), {'x0': 3.0 + 1.2, 'x1': 1.0 - 2.3}
+    )
     # Test shift in out of bounds
     trial = pyvizier.Trial(parameters={'x0': -5.0, 'x1': 5.0})
-    shifted_exptr._offset([trial], shift=-shift)
+    shifted_exptr._offset([trial], shift=shift)
     self.assertEqual(trial.parameters.as_dict(), {'x0': -5.0, 'x1': 5.0})
 
   def test_shift_forward(self):
@@ -137,14 +143,37 @@ class ShiftingExperimenterTest(parameterized.TestCase):
     # Test shift within bounds
     trial = pyvizier.Trial(parameters={'x0': 3.0, 'x1': 1.0})
     shifted_exptr._offset([trial], shift=shift)
-    self.assertEqual(trial.parameters.as_dict(), {
-        'x0': 3.0 + 1.2,
-        'x1': 1.0 - 2.3
-    })
+    self.assertEqual(
+        trial.parameters.as_dict(), {'x0': 3.0 - 1.2, 'x1': 1.0 + 2.3}
+    )
     # Test shift in out of bounds
     trial = pyvizier.Trial(parameters={'x0': 5.0, 'x1': -5.0})
-    shifted_exptr._offset([trial], shift=shift)
+    shifted_exptr._offset([trial], shift=-shift)
     self.assertEqual(trial.parameters.as_dict(), {'x0': 5.0, 'x1': -5.0})
+
+  @parameterized.parameters((True,), (False,))
+  def test_shift_forward_oob(self, should_restrict):
+    dim = 2
+    shift = np.array([-2.2, 2.3])
+    func = bbob.Sphere
+    exptr = numpy_experimenter.NumpyExperimenter(
+        func, bbob.DefaultBBOBProblemStatement(dim)
+    )
+    shifted_exptr = shifting_experimenter.ShiftingExperimenter(
+        exptr=exptr, shift=np.asarray(shift), should_restrict=should_restrict
+    )
+    # Test OOB shifts does not change parameter values.
+    trial = pyvizier.Trial(parameters={'x0': 3.0, 'x1': 1.0})
+    shifted_exptr.evaluate([trial])
+    self.assertEqual(trial.parameters.as_dict(), {'x0': 3.0, 'x1': 1.0})
+
+    # Test OOB shifts stay within bounds.
+    shifted_exptr._offset([trial], shift=shift)
+    # x0 is shifted OOB, so clip at 5.0 if should_restrict=True.
+    if should_restrict:
+      self.assertEqual(trial.parameters.as_dict(), {'x0': 5.0, 'x1': 1.0 - 2.3})
+    else:
+      self.assertEqual(trial.parameters.as_dict(), {'x0': 5.2, 'x1': 1.0 - 2.3})
 
   def test_large_shift(self):
     dim = 2
@@ -157,6 +186,19 @@ class ShiftingExperimenterTest(parameterized.TestCase):
       shifting_experimenter.ShiftingExperimenter(
           exptr=exptr, shift=np.asarray(shift))
 
+    shifted_exptr = shifting_experimenter.ShiftingExperimenter(
+        exptr=exptr, shift=np.asarray(shift), should_restrict=False
+    )
+    parameters = exptr.problem_statement().search_space.parameters
+    self.assertEqual(
+        parameters, shifted_exptr.problem_statement().search_space.parameters
+    )
+    t = pyvizier.Trial(
+        parameters={
+            param.name: float(index) for index, param in enumerate(parameters)
+        }
+    )
+    shifted_exptr.evaluate([t])
 
 if __name__ == '__main__':
   absltest.main()

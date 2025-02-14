@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Tests for vizier.pyvizier.shared.trial."""
 import copy
@@ -67,12 +69,12 @@ ParameterValue = trial.ParameterValue
 
 class ParameterValueTest(parameterized.TestCase):
 
-  @parameterized.named_parameters(('True', True), ('False', False))
+  @parameterized.parameters((True,), (False,))
   def testBool(self, bool_value):
     value = ParameterValue(bool_value)
     self.assertEqual(value.as_float, float(bool_value))
     self.assertEqual(value.as_int, int(bool_value))
-    self.assertEqual(value.as_str, str(bool_value).lower())
+    self.assertEqual(value.as_str, str(bool_value))
 
   def testIntegralFloat0(self):
     value = ParameterValue(0.0)
@@ -117,14 +119,14 @@ class ParameterValueTest(parameterized.TestCase):
     self.assertEqual(value.as_str, '2')
 
   def testStringTrue(self):
-    value = ParameterValue('true')
+    value = ParameterValue(trial.TRUE_VALUE)
     self.assertEqual(value.as_bool, True)
-    self.assertEqual(value.as_str, 'true')
+    self.assertEqual(value.as_str, trial.TRUE_VALUE)
 
   def testStringFalse(self):
-    value = ParameterValue('false')
+    value = ParameterValue(trial.FALSE_VALUE)
     self.assertEqual(value.as_bool, False)
-    self.assertEqual(value.as_str, 'false')
+    self.assertEqual(value.as_str, trial.FALSE_VALUE)
 
   def testStringFloat1(self):
     value = ParameterValue('1.0')
@@ -139,13 +141,6 @@ class ParameterValueTest(parameterized.TestCase):
     self.assertEqual(value.as_int, 1)
     self.assertIsNone(value.as_bool)
     self.assertEqual(value.as_str, '1')
-
-  def testCastAsExternalNone(self):
-    value = ParameterValue(1.0)
-    # pytype: disable=wrong-arg-types
-    with self.assertRaisesRegex(ValueError, 'Unknown external type'):
-      value.cast(None)
-    # pytype: enable=wrong-arg-types
 
   def testParameterCanHaveNonFiniteValues(self):
     ParameterValue(float('nan'))
@@ -168,12 +163,14 @@ class TrialTest(absltest.TestCase):
     self.assertLessEqual(test.completion_time,
                          datetime.datetime.now().astimezone())
     self.assertGreaterEqual(test.completion_time, test.creation_time)
+    assert test.duration is not None
     self.assertGreaterEqual(test.duration.total_seconds(), 0)
 
     self.assertEqual(completed.final_measurement, measurement)
     self.assertLessEqual(completed.completion_time,
                          datetime.datetime.now().astimezone())
     self.assertGreaterEqual(completed.completion_time, completed.creation_time)
+    assert completed.duration is not None
     self.assertGreaterEqual(completed.duration.total_seconds(), 0)
 
     # completed is the same reference as test.
@@ -196,6 +193,7 @@ class TrialTest(absltest.TestCase):
     self.assertGreaterEqual(completed.completion_time, completed.creation_time)
     self.assertLessEqual(completed.completion_time,
                          datetime.datetime.now().astimezone())
+    assert completed.duration is not None
     self.assertGreaterEqual(completed.duration.total_seconds(), 0)
     self.assertEqual(completed.status, trial.TrialStatus.COMPLETED)
     self.assertTrue(completed.is_completed)
@@ -309,6 +307,21 @@ class TrialTest(absltest.TestCase):
     trial2 = trial.Trial()
     trial1.parameters['x1'] = trial.ParameterValue(5)
     self.assertEmpty(trial2.parameters)
+
+  def testCreationTime(self):
+    trial1 = trial.Trial()
+    trial2 = trial.Trial()
+    self.assertGreater(trial2.creation_time, trial1.creation_time)
+
+  def testCompletionTime(self):
+    trial1 = trial.Trial(
+        final_measurement=trial.Measurement(
+            metrics={'pr-auc': Metric(value=0.8)}
+        )
+    )
+    self.assertEqual(trial1.creation_time, trial1.completion_time)
+    trial2 = trial.Trial(infeasibility_reason='reasons')
+    self.assertEqual(trial2.creation_time, trial2.completion_time)
 
 
 class ParameterDictTest(parameterized.TestCase):

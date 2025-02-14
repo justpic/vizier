@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Comparison test for algorithms using score analysis.
 
@@ -28,13 +30,15 @@ NOTE: assert_converges_faster is a generic method name that conveys the general
 use of the class.
 """
 
-import logging
-
+from absl import logging
 import attr
+from jax import random
 import numpy as np
 from vizier import benchmarks
+from vizier import pyvizier as vz
 from vizier._src.algorithms.optimizers import vectorized_base as vb
 from vizier._src.benchmarks.analyzers import simple_regret_score
+from vizier.benchmarks import analyzers
 from vizier.pyvizier import converters
 
 
@@ -84,20 +88,27 @@ class EfficiencyComparisonTester:
       runner.run(baseline_state)
       runner.run(candidate_state)
       baseline_curves.append(
-          benchmarks.ConvergenceCurveConverter(
-              baseline_statement.metric_information.item()).convert(
-                  baseline_state.algorithm.supporter.GetTrials()))
+          analyzers.ConvergenceCurveConverter(
+              baseline_statement.metric_information.item()
+          ).convert(baseline_state.algorithm.supporter.GetTrials())
+      )
       candidate_curves.append(
-          benchmarks.ConvergenceCurveConverter(
-              baseline_statement.metric_information.item()).convert(
-                  candidate_state.algorithm.supporter.GetTrials()))
+          analyzers.ConvergenceCurveConverter(
+              baseline_statement.metric_information.item()
+          ).convert(candidate_state.algorithm.supporter.GetTrials())
+      )
 
-    baseline_curve = benchmarks.ConvergenceCurve.align_xs(baseline_curves)
-    candidate_curve = benchmarks.ConvergenceCurve.align_xs(candidate_curves)
-    comparator = benchmarks.ConvergenceCurveComparator(baseline_curve)
+    baseline_curve = analyzers.ConvergenceCurve.align_xs(
+        baseline_curves, interpolate_repeats=True
+    )[0]
+    candidate_curve = analyzers.ConvergenceCurve.align_xs(
+        candidate_curves, interpolate_repeats=True
+    )[0]
+    comparator = analyzers.LogEfficiencyConvergenceCurveComparator(
+        baseline_curve=baseline_curve, compared_curve=candidate_curve
+    )
 
-    if (log_eff_score :=
-        comparator.get_log_efficiency_score(candidate_curve)) < score_threshold:
+    if (log_eff_score := comparator.score()) < score_threshold:
       raise FailedComparisonTestError(
           f'Log efficiency score {log_eff_score} is less than {score_threshold}'
           f' when comparing algorithms: {candidate_state_factory} '
@@ -105,7 +116,7 @@ class EfficiencyComparisonTester:
           f' Trials with {self.num_repeats} repeats')
 
 
-@attr.define
+@attr.define(kw_only=True)
 class SimpleRegretComparisonTester:
   """Compare two algorithms by their simple regrets.
 
@@ -117,74 +128,71 @@ class SimpleRegretComparisonTester:
   difference in the simple regret sample means. The T-test score (p-value) is
   compared against the significance level (alpha) to determine if the test
   passed.
-
-  The test assumes MAXIMIZATION optimization problem. For MINIMIZATION, invert
-  the sign of the score function.
   """
   baseline_num_trials: int
   candidate_num_trials: int
+  baseline_suggestion_batch_size: int
+  candidate_suggestion_batch_size: int
   baseline_num_repeats: int
   candidate_num_repeats: int
   alpha: float = attr.field(
       validator=attr.validators.and_(
           attr.validators.ge(0), attr.validators.le(0.1)),
       default=0.05)
+  goal: vz.ObjectiveMetricGoal
 
   def assert_optimizer_better_simple_regret(
       self,
-      converter: converters.TrialToArrayConverter,
-      score_fn: vb.BatchArrayScoreFunction,
-      baseline_optimizer: vb.VectorizedOptimizer,
-      candidate_optimizer: vb.VectorizedOptimizer,
+      converter: converters.TrialToModelInputConverter,
+      score_fn: vb.ArrayScoreFunction,
+      baseline_strategy_factory: vb.VectorizedStrategyFactory,
+      candidate_strategy_factory: vb.VectorizedStrategyFactory,
   ) -> None:
     """Assert if candidate optimizer has better simple regret than the baseline.
     """
-    baseline_simple_regrets = []
-    candidate_simple_regrets = []
+    baseline_obj_values = []
+    candidate_obj_values = []
 
-    for _ in range(self.baseline_num_repeats):
-      trial = baseline_optimizer.optimize(
-          converter,
-          score_fn,
-          count=1,
-          max_evaluations=self.baseline_num_trials)
-      simple_regret = trial[0].final_measurement.metrics['acquisition'].value
-      baseline_simple_regrets.append(simple_regret)
+    baseline_optimizer_factory = vb.VectorizedOptimizerFactory(
+        baseline_strategy_factory,
+        suggestion_batch_size=self.baseline_suggestion_batch_size,
+        max_evaluations=self.baseline_num_trials,
+    )
+    candidate_optimizer_factory = vb.VectorizedOptimizerFactory(
+        candidate_strategy_factory,
+        suggestion_batch_size=self.candidate_suggestion_batch_size,
+        max_evaluations=self.candidate_num_trials,
+    )
+    baseline_optimizer = baseline_optimizer_factory(converter)
+    candidate_optimizer = candidate_optimizer_factory(converter)
 
-    for _ in range(self.candidate_num_repeats):
-      trial = candidate_optimizer.optimize(
-          converter,
-          score_fn,
-          count=1,
-          max_evaluations=self.candidate_num_trials)
-      simple_regret = trial[0].final_measurement.metrics['acquisition'].value
-      candidate_simple_regrets.append(simple_regret)
+    for i in range(self.baseline_num_repeats):
+      res = baseline_optimizer(score_fn, count=1, seed=random.PRNGKey(i))  # pytype: disable=wrong-arg-types
+      trial = vb.best_candidates_to_trials(res, converter)
+      baseline_obj_values.append(
+          trial[0].final_measurement_or_die.metrics['acquisition'].value
+      )
 
-    p_value = simple_regret_score.t_test_less_mean_score(
-        baseline_simple_regrets, candidate_simple_regrets)
-    msg = self._generate_summary(baseline_simple_regrets,
-                                 candidate_simple_regrets, p_value)
+    for i in range(self.candidate_num_repeats):
+      res = candidate_optimizer(score_fn, count=1, seed=random.PRNGKey(i))  # pytype: disable=wrong-arg-types
+      trial = vb.best_candidates_to_trials(res, converter)
+      candidate_obj_values.append(
+          trial[0].final_measurement_or_die.metrics['acquisition'].value
+      )
 
-    if p_value <= self.alpha:
-      logging.info('Convergence test PASSED:\n %s', msg)
-
-    else:
-      raise FailedSimpleRegretConvergenceTestError(msg)
+    self._conclude_test(baseline_obj_values, candidate_obj_values)
 
   def assert_benchmark_state_better_simple_regret(
       self,
       baseline_benchmark_state_factory: benchmarks.BenchmarkStateFactory,
       candidate_benchmark_state_factory: benchmarks.BenchmarkStateFactory,
-      *,
-      baseline_batch_size: int = 1,
-      candidate_batch_size: int = 1,
   ) -> None:
     """Runs simple-regret convergence test for benchmark state."""
 
     def _run_one(benchmark_state_factory: benchmarks.BenchmarkStateFactory,
-                 num_trials: int, batch_size: int) -> float:
+                 num_trials: int, batch_size: int, seed: int) -> float:
       """Run one benchmark run and returns simple regret."""
-      benchmark_state = benchmark_state_factory()
+      benchmark_state = benchmark_state_factory(seed=seed)
       baseline_runner = benchmarks.BenchmarkRunner(
           benchmark_subroutines=[benchmarks.GenerateAndEvaluate(batch_size)],
           num_repeats=num_trials // batch_size)
@@ -193,45 +201,59 @@ class SimpleRegretComparisonTester:
       best_trial = benchmark_state.algorithm.supporter.GetBestTrials(count=1)[0]
       metric_name = benchmark_state.experimenter.problem_statement(
       ).single_objective_metric_name
-      return best_trial.final_measurement.metrics[metric_name].value
+      return best_trial.final_measurement_or_die.metrics[metric_name].value
 
-    baseline_simple_regrets = []
-    candidate_simple_regrets = []
+    baseline_obj_values = []
+    candidate_obj_values = []
 
-    for _ in range(self.baseline_num_repeats):
-      baseline_simple_regrets.append(
-          _run_one(baseline_benchmark_state_factory, self.baseline_num_trials,
-                   baseline_batch_size))
-    for _ in range(self.candidate_num_repeats):
-      candidate_simple_regrets.append(
-          _run_one(candidate_benchmark_state_factory, self.candidate_num_trials,
-                   candidate_batch_size))
+    for idx in range(self.baseline_num_repeats):
+      baseline_obj_values.append(
+          _run_one(
+              benchmark_state_factory=baseline_benchmark_state_factory,
+              num_trials=self.baseline_num_trials,
+              batch_size=self.baseline_suggestion_batch_size,
+              seed=idx))
 
-    p_value = simple_regret_score.t_test_less_mean_score(
-        baseline_simple_regrets, candidate_simple_regrets)
-    msg = self._generate_summary(baseline_simple_regrets,
-                                 candidate_simple_regrets, p_value)
+    for idx in range(self.candidate_num_repeats):
+      candidate_obj_values.append(
+          _run_one(
+              benchmark_state_factory=candidate_benchmark_state_factory,
+              num_trials=self.candidate_num_trials,
+              batch_size=self.candidate_suggestion_batch_size,
+              seed=idx))
+    self._conclude_test(baseline_obj_values, candidate_obj_values)
+
+  def _conclude_test(self, baseline_obj_values: list[float],
+                     candidate_obj_values: list[float]) -> None:
+    """Concludes test based on baseline and candidate objective func values."""
+
+    p_value = simple_regret_score.t_test_mean_score(baseline_obj_values,
+                                                    candidate_obj_values,
+                                                    self.goal)
+    msg = self._generate_summary(baseline_obj_values, candidate_obj_values,
+                                 p_value)
     if p_value <= self.alpha:
       logging.info('Convergence test PASSED:\n %s', msg)
-
     else:
       raise FailedSimpleRegretConvergenceTestError(msg)
 
   def _generate_summary(
       self,
-      baseline_simple_regrets: list[float],
-      candidate_simple_regrets: list[float],
+      baseline_obj_values: list[float],
+      candidate_obj_values: list[float],
       p_value: float,
   ) -> str:
     """Generate summary message."""
-    baseline_mean = np.mean(baseline_simple_regrets)
-    baseline_std = np.std(baseline_simple_regrets)
-    candidate_mean = np.mean(candidate_simple_regrets)
-    candidate_std = np.std(candidate_simple_regrets)
-    return (f'P-value={p_value}. Alpha={self.alpha}.'
-            f'\nBaseline Simple Regret Mean: {baseline_mean}.'
-            f'\nBaseline Simple Regret Std: {baseline_std}.'
-            f'\nCandidate Simple Regret Mean: {candidate_mean}.'
-            f'\nCandidate Simple Regret Std: {candidate_std}.'
-            f'\nBaseline Simple Regret Scores: {baseline_simple_regrets}'
-            f'\nCandidate Simple Regret Scores: {candidate_simple_regrets}')
+    baseline_mean = np.mean(baseline_obj_values)
+    baseline_std = np.std(baseline_obj_values)
+    candidate_mean = np.mean(candidate_obj_values)
+    candidate_std = np.std(candidate_obj_values)
+    return (f'\nObjective goal={self.goal.name}'
+            f'\nP-value={p_value}'
+            f'\nAlpha={self.alpha}'
+            f'\nBaseline Objective Mean: {baseline_mean}'
+            f'\nBaseline Objective Std: {baseline_std}'
+            f'\nCandidate Objective Mean: {candidate_mean}'
+            f'\nCandidate Objective Std: {candidate_std}'
+            f'\nBaseline Objective Scores: {baseline_obj_values}'
+            f'\nCandidate Objective Scores: {candidate_obj_values}')

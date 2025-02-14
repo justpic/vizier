@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Convenience classes for configuring Vizier Study Configs and Search Spaces.
 
@@ -26,6 +28,7 @@ protos:
   * `SearchSpace` and `SearchSpaceSelector` classes deals with Vizier search
     spaces. Both flat spaces and conditional parameters are supported.
 """
+
 import collections
 import copy
 import enum
@@ -39,39 +42,42 @@ from vizier._src.pyvizier.shared import base_study_config
 from vizier._src.pyvizier.shared import common
 from vizier._src.pyvizier.shared import parameter_config
 from vizier._src.pyvizier.shared import trial
-from vizier.service import study_pb2
+from vizier._src.service import constants
+from vizier._src.service import study_pb2
+
 
 ################### PyTypes ###################
-ScaleType = parameter_config.ScaleType
-ExternalType = parameter_config.ExternalType
-# A sequence of possible internal parameter values.
-MonotypeParameterSequence = parameter_config.MonotypeParameterSequence
 # Possible types for trial parameter values after cast to external types.
-ParameterValueSequence = Union[trial.ParameterValueTypes, Sequence[int],
-                               Sequence[float], Sequence[str], Sequence[bool]]
+# TODO: Define this in _src/shared/
+ParameterValueSequence = Union[
+    trial.ParameterValueTypes,
+    Sequence[int],
+    Sequence[float],
+    Sequence[str],
+    Sequence[bool],
+]
 
 ################### Enums ###################
-
-# Values should NEVER be removed from ObjectiveMetricGoal, only added.
-ObjectiveMetricGoal = base_study_config.ObjectiveMetricGoal
 
 
 class Algorithm(enum.Enum):
   """Valid Values for StudyConfig.Algorithm."""
-  # Let Vizier choose the algorithm. Currently defaults to RANDOM_SEARCH.
+  # Let Vizier choose algorithm. Currently defaults to GP_UCB_PE.
   ALGORITHM_UNSPECIFIED = 'ALGORITHM_UNSPECIFIED'
+  # Gaussian Process UCB with Pure Exploration.
+  GP_UCB_PE = 'GP_UCB_PE'
   # Gaussian Process Bandit.
   GAUSSIAN_PROCESS_BANDIT = 'GAUSSIAN_PROCESS_BANDIT'
   # Grid search within the feasible space.
   GRID_SEARCH = 'GRID_SEARCH'
+  # Grid search, but with parameters and values shuffled.
+  SHUFFLED_GRID_SEARCH = 'SHUFFLED_GRID_SEARCH'
   # Random search within the feasible space.
   RANDOM_SEARCH = 'RANDOM_SEARCH'
   # Quasi-random search using Halton sequences.
   QUASI_RANDOM_SEARCH = 'QUASI_RANDOM_SEARCH'
   # NSGA2 (https://ieeexplore.ieee.org/document/996017).
   NSGA2 = 'NSGA2'
-  # Emukit implementation of GP-EI (https://emukit.github.io/).
-  EMUKIT_GP_EI = 'EMUKIT_GP_EI'
   # BOCS (https://arxiv.org/abs/1806.08838) only applicable to boolean search
   # spaces.
   BOCS = 'BOCS'
@@ -80,16 +86,19 @@ class Algorithm(enum.Enum):
   HARMONICA = 'HARMONICA'
   # CMA-ES (https://arxiv.org/abs/1604.00772) for DOUBLE search spaces only
   CMA_ES = 'CMA_ES'
+  # Eagle Strategy (https://doi.org/10.1007/978-3-642-04944-6_14).
+  EAGLE_STRATEGY = 'EAGLE_STRATEGY'
 
 
 class ObservationNoise(enum.Enum):
   """Valid Values for StudyConfig.ObservationNoise."""
-  OBSERVATION_NOISE_UNSPECIFIED = study_pb2.StudySpec.ObservationNoise.OBSERVATION_NOISE_UNSPECIFIED
+
+  OBSERVATION_NOISE_UNSPECIFIED = (
+      study_pb2.StudySpec.ObservationNoise.OBSERVATION_NOISE_UNSPECIFIED
+  )
   LOW = study_pb2.StudySpec.ObservationNoise.LOW
   HIGH = study_pb2.StudySpec.ObservationNoise.HIGH
 
-
-SearchSpaceSelector = base_study_config.SearchSpaceSelector
 
 ################### Main Class ###################
 #
@@ -105,7 +114,7 @@ SearchSpaceSelector = base_study_config.SearchSpaceSelector
 #     study_config = pyvizier.StudyConfig(
 #       metric_information=[pyvizier.MetricInformation(
 #         name='accuracy', goal=pyvizier.ObjectiveMetricGoal.MAXIMIZE)],
-#       search_space=SearchSpace.from_proto(proto),
+#       search_space=vz.SearchSpace.from_proto(proto),
 #     )
 #     # OR:
 #     study_config = pyvizier.StudyConfig()
@@ -125,18 +134,12 @@ SearchSpaceSelector = base_study_config.SearchSpaceSelector
 class StudyConfig(base_study_config.ProblemStatement):
   """A builder and wrapper for study_pb2.StudySpec proto."""
 
-  search_space: base_study_config.SearchSpace = attr.field(
-      init=True,
-      factory=base_study_config.SearchSpace,
-      validator=attr.validators.instance_of(base_study_config.SearchSpace),
-      on_setattr=attr.setters.validate)
-
   algorithm: str = attr.field(
       init=True,
       validator=attr.validators.instance_of((Algorithm, str)),
       converter=lambda x: x.value if isinstance(x, enum.Enum) else x,
       on_setattr=[attr.setters.convert, attr.setters.validate],
-      default='RANDOM_SEARCH',
+      default='ALGORITHM_UNSPECIFIED',
       kw_only=True)
 
   pythia_endpoint: Optional[str] = attr.field(
@@ -144,14 +147,6 @@ class StudyConfig(base_study_config.ProblemStatement):
       validator=attr.validators.optional(attr.validators.instance_of(str)),
       on_setattr=[attr.setters.convert, attr.setters.validate],
       default=None,
-      kw_only=True)
-
-  # TODO: This name/type combo is confusing.
-  metric_information: base_study_config.MetricsConfig = attr.field(
-      init=True,
-      factory=base_study_config.MetricsConfig,
-      converter=base_study_config.MetricsConfig,
-      validator=attr.validators.instance_of(base_study_config.MetricsConfig),
       kw_only=True)
 
   observation_noise: ObservationNoise = attr.field(
@@ -171,13 +166,6 @@ class StudyConfig(base_study_config.ProblemStatement):
           on_setattr=attr.setters.validate,
           kw_only=True)
 
-  metadata: common.Metadata = attr.field(
-      init=True,
-      kw_only=True,
-      factory=common.Metadata,
-      validator=attr.validators.instance_of(common.Metadata),
-      on_setattr=[attr.setters.convert, attr.setters.validate])
-
   # An internal representation as a StudyConfig proto.
   # If this object was created from a StudyConfig proto, a copy of the original
   # proto is kept, to make sure that unknown proto fields are preserved in
@@ -190,6 +178,15 @@ class StudyConfig(base_study_config.ProblemStatement):
 
   # Public attributes, methods and properties.
   @classmethod
+  def pythia_endpoint_metadata(cls, pythia_endpoint: str) -> common.Metadata:
+    """Returns the MetaData for updating the pythia endpoint."""
+    metadata = common.Metadata()
+    metadata.ns(constants.PYTHIA_ENDPOINT_NAMESPACE)[
+        constants.PYTHIA_ENDPOINT_KEY
+    ] = pythia_endpoint
+    return metadata
+
+  @classmethod
   def from_proto(cls, proto: study_pb2.StudySpec) -> 'StudyConfig':
     """Converts a StudyConfig proto to a StudyConfig object.
 
@@ -201,28 +198,40 @@ class StudyConfig(base_study_config.ProblemStatement):
     """
     algorithm = proto.algorithm
 
-    pythia_endpoint = None
-    if proto.HasField('pythia_endpoint'):
-      pythia_endpoint = proto.pythia_endpoint
-
     metric_information = base_study_config.MetricsConfig(
-        sorted([
-            proto_converters.MetricInformationConverter.from_proto(m)
-            for m in proto.metrics
-        ],
-               key=lambda x: x.name))
+        sorted(
+            [
+                proto_converters.MetricInformationConverter.from_proto(m)
+                for m in proto.metrics
+            ],
+            key=lambda x: x.name,
+        )
+    )
 
     oneof_name = proto.WhichOneof('automated_stopping_spec')
     if not oneof_name:
       automated_stopping_config = None
     else:
-      automated_stopping_config = automated_stopping.AutomatedStoppingConfig.from_proto(
-          getattr(proto, oneof_name))
+      automated_stopping_config = (
+          automated_stopping.AutomatedStoppingConfig.from_proto(
+              getattr(proto, oneof_name)
+          )
+      )
 
     metadata = common.Metadata()
     for kv in proto.metadata:
       metadata.abs_ns(common.Namespace.decode(kv.ns))[kv.key] = (
-          kv.proto if kv.HasField('proto') else kv.value)
+          kv.proto if kv.HasField('proto') else kv.value
+      )
+
+    # Store the pythia_endpoint as a property for convenience.
+    pythia_endpoint = None
+    try:
+      pythia_endpoint = metadata.ns(constants.PYTHIA_ENDPOINT_NAMESPACE)[
+          constants.PYTHIA_ENDPOINT_KEY
+      ]
+    except KeyError:
+      pass  # Pythia endpoint doesn't exist.
 
     return cls(
         search_space=proto_converters.SearchSpaceConverter.from_proto(proto),
@@ -238,8 +247,6 @@ class StudyConfig(base_study_config.ProblemStatement):
     """Serializes this object to a StudyConfig proto."""
     proto = copy.deepcopy(self._study_config)
     proto.algorithm = self.algorithm
-    if self.pythia_endpoint is not None:
-      proto.pythia_endpoint = self.pythia_endpoint
     proto.observation_noise = self.observation_noise.value
 
     del proto.metrics[:]
@@ -258,30 +265,41 @@ class StudyConfig(base_study_config.ProblemStatement):
                     study_pb2.StudySpec.DefaultEarlyStoppingSpec):
         proto.default_stopping_spec.CopyFrom(auto_stop_proto)
 
+    # The internally stored proto already contains metadata.
+    proto.ClearField('metadata')
     for ns in self.metadata.namespaces():
       ns_string = ns.encode()
       ns_layer = self.metadata.abs_ns(ns)
       for key, value in ns_layer.items():
         metadata_util.assign(proto, key=key, ns=ns_string, value=value)
+    if self.pythia_endpoint is not None:
+      ns = common.Namespace([constants.PYTHIA_ENDPOINT_NAMESPACE])
+      metadata_util.assign(
+          proto,
+          key=constants.PYTHIA_ENDPOINT_KEY,
+          ns=ns.encode(),
+          value=self.pythia_endpoint,
+          mode='insert_or_assign',
+      )
     return proto
 
   def _trial_to_external_values(
-      self, pytrial: trial.Trial) -> Dict[str, Union[float, int, str, bool]]:
+      self, pytrial: trial.Trial
+  ) -> Dict[str, Union[float, int, str, bool]]:
     """Returns the trial paremeter values cast to external types."""
     parameter_values: Dict[str, Union[float, int, str]] = {}
     external_values: Dict[str, Union[float, int, str, bool]] = {}
     # parameter_configs is a list of Tuple[parent_name, ParameterConfig].
-    parameter_configs: List[Tuple[Optional[str],
-                                  parameter_config.ParameterConfig]] = [
-                                      (None, p)
-                                      for p in self.search_space.parameters
-                                  ]
+    parameter_configs: List[
+        Tuple[Optional[str], parameter_config.ParameterConfig]
+    ] = [(None, p) for p in self.search_space.parameters]
     remaining_parameters = copy.deepcopy(pytrial.parameters)
     # Traverse the conditional tree using a BFS.
     while parameter_configs and remaining_parameters:
       parent_name, pc = parameter_configs.pop(0)
       parameter_configs.extend(
-          (pc.name, child) for child in pc.child_parameter_configs)
+          (pc.name, child) for child in pc.child_parameter_configs
+      )
       if pc.name not in remaining_parameters:
         continue
       if parent_name is not None:
@@ -321,7 +339,8 @@ class StudyConfig(base_study_config.ProblemStatement):
     return self._pytrial_parameters(pytrial)
 
   def _pytrial_parameters(
-      self, pytrial: trial.Trial) -> Dict[str, ParameterValueSequence]:
+      self, pytrial: trial.Trial
+  ) -> Dict[str, ParameterValueSequence]:
     """Returns the trial values, cast to external types, if they exist.
 
     Args:
@@ -347,8 +366,9 @@ class StudyConfig(base_study_config.ProblemStatement):
     # multi_dim_params: Dict[str, List[Tuple[int, ParameterValueSequence]]]
     multi_dim_params = collections.defaultdict(list)
     for name in trial_external_values:
-      base_index = SearchSpaceSelector.parse_multi_dimensional_parameter_name(
-          name)
+      base_index = parameter_config.SearchSpaceSelector.parse_multi_dimensional_parameter_name(
+          name
+      )
       if base_index is None:
         trial_final_values[name] = trial_external_values[name]
       else:
@@ -383,10 +403,9 @@ class StudyConfig(base_study_config.ProblemStatement):
     return self._pytrial_metrics(
         pytrial, include_all_metrics=include_all_metrics)
 
-  def _pytrial_metrics(self,
-                       pytrial: trial.Trial,
-                       *,
-                       include_all_metrics=False) -> Dict[str, float]:
+  def _pytrial_metrics(
+      self, pytrial: trial.Trial, *, include_all_metrics=False
+  ) -> Dict[str, float]:
     """Returns the trial's final measurement metric values.
 
     If the trial is not completed, or infeasible, no metrics are returned.
@@ -406,6 +425,8 @@ class StudyConfig(base_study_config.ProblemStatement):
 
     metrics: Dict[str, float] = {}
     if pytrial.is_completed and not pytrial.infeasible:
+      if pytrial.final_measurement is None:
+        return metrics
       for name in pytrial.final_measurement.metrics:
         if (include_all_metrics or
             (not include_all_metrics and name in configured_metrics)):

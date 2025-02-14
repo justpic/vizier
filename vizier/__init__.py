@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """Init file."""
 import os
 import sys
 
 THIS_DIR = os.path.dirname(os.path.realpath(__file__))
-PROTO_ROOT = os.path.realpath(os.path.join(THIS_DIR, "service"))
+PROTO_ROOT = os.path.realpath(os.path.join(THIS_DIR, "_src", "service"))
 
 sys.path.append(PROTO_ROOT)
 
-__version__ = "0.0.10"
+__version__ = "0.1.24"

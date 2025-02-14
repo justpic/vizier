@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC.
+# Copyright 2024 Google LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from __future__ import annotations
 
 """Exceptions used in the PythiaServer and Pythia Policy code."""
 
@@ -32,22 +34,20 @@ class TemporaryPythiaError(PythiaError):
   """
 
 
-class CachedPolicyIsStaleError(PythiaError):
-  """Raise this if the cached Policy instance is too stale.
-
-  Raised by Policy code.  Because Policy instances are cached,
-  they could potentially become stale.  If so, code should raise this,
-  and the computation will be restarted with a freshly created Policy
-  instance.
-  """
-
-
 class InactivateStudyError(PythiaError):
   """Pythia cannot handle this Study as configured; inactivate it.
 
   This terminates the interaction and returns an ARGUMENT_INVALID gRPC error
   code.  It's intended for unrecoverable errors, or misconfigued Studies.
   There will be no re-tries.
+  """
+
+
+class PythiaFallbackError(PythiaError):
+  """The algorithm could not handle a StudyConfig corner case: fall back.
+
+  This is typically raised by a special-purpose algorithm.  When raised,
+  Vizier should re-try once with a more generic algorithm.
   """
 
 
@@ -58,11 +58,6 @@ class LoadTooLargeError(PythiaError):
   of times by the Vizier server, on the assumption that there will eventually
   be a server that's not overly busy.
   """
-
-
-class CancelledByVizierError(PythiaError):
-  """Indicates that Vizier cancelled the interaction."""
-  pass
 
 
 class CancelComputeError(Exception):
